@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+.env/
+.env
+ENV/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# VS Code / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Project specific data and logs
+data/
+csv dosyaları analiz/
+march-machine-leraning-mania-2026/
+*.csv
+*.log
+
+# MCP / AI Agent Folders
+.claude/
+.playwright-mcp/
