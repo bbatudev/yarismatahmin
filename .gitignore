@@ -39,7 +39,6 @@ ENV/
 
 # Project specific data and logs
 data/
-csv dosyaları analiz/
 march-machine-leraning-mania-2026/
 *.csv
 *.log

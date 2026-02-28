@@ -1,0 +1,1559 @@
+================================================================================
+                        CSV DOSYALARI ANALİZ RAPORU
+================================================================================
+
+────────────────────────────────────────────────────────────────────────────
+1. DOSYA: Cities.csv
+────────────────────────────────────────────────────────────────────────────
+AÇIKLAMA:
+Bu dosyanın içerisinde sadece şehir ID'leri, şehir isimleri ve şehrin ait olduğu
+state (eyaletin) kısaltması bulunuyor.
+
+DEĞİŞKENLER TABLOSU:
+┌──────────┬─────────────────────────────────────────────────────────────┐
+│ Değişken │ Açıklama                                                     │
+├──────────┼─────────────────────────────────────────────────────────────┤
+│ CityID   │ Şehrin benzersiz kimlik numarası                           │
+│ City     │ Şehir adı                                                   │
+│ State    │ Eyalet kısaltması (2 harfli)                                │
+└──────────┴─────────────────────────────────────────────────────────────┘
+
+VERİ ÖRNEĞİ:
+┌────────┬──────────────┬───────┐
+│ CityID │ City         │ State │
+├────────┼──────────────┼───────┤
+│ 4001   │ Abilene      │ TX    │
+│ 4002   │ Akron        │ OH    │
+│ 4003   │ Albany       │ NY    │
+│ 4004   │ Albuquerque  │ NM    │
+└────────┴──────────────┴───────┘
+
+
+────────────────────────────────────────────────────────────────────────────
+2. DOSYA: Conferences.csv
+────────────────────────────────────────────────────────────────────────────
+AÇIKLAMA:
+Burada sadece hangi konferansta olduğu, onun kısaltması ve kısaltmanın uzun hali var.
+
+DEĞİŞKENLER TABLOSU:
+┌────────────┬────────────────────────────────────────────────────────────┐
+│ Değişken   │ Açıklama                                                     │
+├────────────┼────────────────────────────────────────────────────────────┤
+│ ConfAbbrev │ Konferans kısaltması                                        │
+│ Description│ Konferansın tam adı                                          │
+└────────────┴────────────────────────────────────────────────────────────┘
+
+VERİ ÖRNEĞİ:
+┌────────────┬──────────────────────────────┐
+│ ConfAbbrev │ Description                  │
+├────────────┼──────────────────────────────┤
+│ a_sun      │ Atlantic Sun Conference      │
+│ a_ten      │ Atlantic 10 Conference       │
+│ aac        │ American Athletic Conference │
+│ acc        │ Atlantic Coast Conference    │
+└────────────┴──────────────────────────────┘
+
+
+────────────────────────────────────────────────────────────────────────────
+3. DOSYA: MConferenceTourneyGames.csv
+────────────────────────────────────────────────────────────────────────────
+AÇIKLAMA:
+Burada maçlarla ilgili bilgi var. Bir maçın oynandığı `Season` yazıyor ve
+`ConfAbbrev` olarak önceki dosyada incelediğimiz konferansın kısaltması yer alıyor.
+
+Aynı şekilde `DayNum` isimli değişkenimizde sezonun kaçıncı günü maçın oynandığını
+söylüyor. Ayrıca aldığım bilgiye göre bu genellikle 1'den başlayıp sezon sonuna
+kadar giden bir numaraymış. Turnuvalarda genelde sezonun sonlarında 120-132.
+günler arası oynanırmış gibi söyleniyor.
+
+Bununla beraber `WTeamID` ve `LTeamID` de kazanan ve kaybeden takımın kimlik
+numarasını söylüyor. Sonuçta her takım bir kimlik numarasına sahiptir.
+
+DEĞİŞKENLER TABLOSU:
+┌───────────┬─────────────────────────────────────────────────────────────┐
+│ Değişken  │ Açıklama                                                     │
+├───────────┼─────────────────────────────────────────────────────────────┤
+│ Season    │ Maçın oynandığı sezon (yıl)                                  │
+│ ConfAbbrev│ Konferans kısaltması                                          │
+│ DayNum    │ Sezonun kaçıncı gününde oynandığı                            │
+│ WTeamID   │ Kazanan takımın ID'si                                        │
+│ LTeamID   │ Kaybeden takımın ID'si                                       │
+│ WScore    │ Kazanan takımın skoru                                        │
+│ LScore    │ Kaybeden takımın skoru                                       │
+│ WLoc      │ Maçın yeri (N=Neutral, H=Ağır, D=Deplasman)                 │
+│ NumOT     │ Uzatma sayısı                                                │
+└───────────┴─────────────────────────────────────────────────────────────┘
+
+VERİ ÖRNEĞİ:
+┌────────┬────────────┬────────┬──────────┬──────────┬─────────┬─────────┐
+│ Season │ ConfAbbrev │ DayNum │ WTeamID  │ LTeamID  │ WScore  │ LScore  │
+├────────┼────────────┼────────┼──────────┼──────────┼─────────┼─────────┤
+│ 2001   │ ovc        │ 120    │ 1122     │ 1369     │ -       │ -       │
+│ 2001   │ ovc        │ 120    │ 1183     │ 1287     │ -       │ -       │
+└────────┴────────────┴────────┴──────────┴──────────┴─────────┴─────────┘
+
+
+────────────────────────────────────────────────────────────────────────────
+4. DOSYA: MGameCities.csv
+────────────────────────────────────────────────────────────────────────────
+AÇIKLAMA:
+Yine öncekilerde gördüğümüz gibi maçın oynandığı `Season`, gün numarası `DayNum`,
+kazanan takım `WTeamID` ve kaybeden takımın `LTeamID` değişkenleri var.
+
+Yeni bir değişken var: `CRType` - "tourney" veya "regular" gibi değerler alıyor.
+Maçın normal sezon mu yoksa turnuva mı olduğunu gösteriyor.
+
+Ayrıca `CityID` var - maçın oynandığı şehri gösteriyor.
+
+DEĞİŞKENLER TABLOSU:
+┌──────────┬─────────────────────────────────────────────────────────────┐
+│ Değişken │ Açıklama                                                     │
+├──────────┼─────────────────────────────────────────────────────────────┤
+│ Season   │ Maçın oynandığı sezon                                        │
+│ DayNum   │ Sezonun kaçıncı günü                                         │
+│ WTeamID  │ Kazanan takım ID'si                                          │
+│ LTeamID  │ Kaybeden takım ID'si                                         │
+│ CRType   │ Maç tipi (Regular/Tourney)                                   │
+│ CityID   │ Oynanan şehrin ID'si                                         │
+└──────────┴─────────────────────────────────────────────────────────────┘
+
+VERİ ÖRNEĞİ:
+┌────────┬────────┬──────────┬──────────┬──────────┬────────┐
+│ Season │ DayNum │ WTeamID  │ LTeamID  │ CRType   │ CityID │
+├────────┼────────┼──────────┼──────────┼──────────┼────────┤
+│ 2010   │ 7      │ 1143     │ 1293     │ Regular  │ 4027   │
+│ 2010   │ 7      │ 1314     │ 1198     │ Regular  │ 4061   │
+└────────┴────────┴──────────┴──────────┴──────────┴────────┘
+
+
+────────────────────────────────────────────────────────────────────────────
+5. DOSYA: MMasseyOrdinals.csv
+────────────────────────────────────────────────────────────────────────────
+AÇIKLAMA:
+Bu dosya en büyük dosya. Takımların farklı rating sistemlerine göre sıralamalarını
+(rank) olarak tutmuş. Bu dosya en çok kullanacağımız dosyalardan biri olabilir.
+Güç indeksi (power index) burada olduğu için derecelendirme sisteminden bahsediyor.
+
+En önemli bilgilerden bir tanesi: Sıralama yapan algoritmanın 3 harfli kısaltması
+verilmiş (`SystemName`).
+
+DEĞİŞKENLER TABLOSU:
+┌───────────────┬──────────────────────────────────────────────────────────┐
+│ Değişken      │ Açıklama                                                  │
+├───────────────┼──────────────────────────────────────────────────────────┤
+│ Season        │ Sezon yılı                                                │
+│ RankingDayNum │ Sıralamanın yapıldığı gün                                 │
+│ SystemName    │ Rating sistemi adı (3 harfli kısaltma)                    │
+│ TeamID        │ Takım ID'si                                               │
+│ OrdinalRank   │ Takımın o sistemdeki sıralaması (1=en iyi)                │
+└───────────────┴──────────────────────────────────────────────────────────┘
+
+VERİ ÖRNEĞİ:
+┌────────┬───────────────┬────────────┬────────┬──────────────┐
+│ Season │ RankingDayNum │ SystemName │ TeamID │ OrdinalRank │
+├────────┼───────────────┼────────────┼────────┼──────────────┤
+│ 2003   │ 35            │ SEL        │ 1102   │ 159          │
+│ 2003   │ 35            │ SEL        │ 1103   │ 229          │
+└────────┴───────────────┴────────────┴────────┴──────────────┘
+
+SİSTEM KISALTMALARI:
+┌─────────────┬────────────────────────────────┐
+│ Kısaltma    │ Anlamı                          │
+├─────────────┼────────────────────────────────┤
+│ AP          │ Associated Press                │
+│ POM         │ KenPom                          │
+│ SAG         │ Sagarin                         │
+│ WLH         │ Wolken                          │
+│ SEL         │ (?)-Seçili Sistem               │
+└─────────────┴────────────────────────────────┘
+
+
+────────────────────────────────────────────────────────────────────────────
+6. DOSYA: MNCAATourneyCompactResults.csv
+────────────────────────────────────────────────────────────────────────────
+AÇIKLAMA:
+Bu dosya NCAA Turnuva maçlarının özet sonuçlarını içerir. Her satır bir maçı
+temsil eder.
+
+DEĞİŞKENLER TABLOSU:
+┌──────────┬─────────────────────────────────────────────────────────────┐
+│ Değişken │ Açıklama                                                     │
+├──────────┼─────────────────────────────────────────────────────────────┤
+│ Season   │ Maçın oynandığı sezon                                        │
+│ DayNum   │ Sezonun kaçıncı günü (Turnuva genelde 132. civarı)           │
+│ WTeamID  │ Kazanan takım ID'si                                          │
+│ WScore   │ Kazanan takımın skoru                                        │
+│ LTeamID  │ Kaybeden takım ID'si                                         │
+│ LScore   │ Kaybeden takımın skoru                                       │
+│ WLoc     │ Maç konumu (N=Neutral, H=Home, A=Away)                       │
+│ NumOT    │ Uzatma sayısı                                                │
+└──────────┴─────────────────────────────────────────────────────────────┘
+
+VERİ ÖRNEĞİ:
+┌────────┬────────┬──────────┬─────────┬──────────┬─────────┬──────┬────────┐
+│ Season │ DayNum │ WTeamID  │ WScore  │ LTeamID  │ LScore  │ WLoc │ NumOT  │
+├────────┼────────┼──────────┼─────────┼──────────┼─────────┼──────┼────────┤
+│ 1985   │ 136    │ 1116     │ 63      │ 1234     │ 54      │ N    │ 0      │
+│ 1985   │ 136    │ 1120     │ 59      │ 1345     │ 58      │ N    │ 0      │
+└────────┴────────┴──────────┴─────────┴──────────┴─────────┴──────┴────────┘
+
+ÖRNEK AÇIKLAMA (1. satır):
+• 1985 (Season): Maçın oynandığı sezon
+• 136 (DayNum): Sezonun 136. günü - Turnuva başlangıcı
+• 1116 (WTeamID): Kazanan takım ID
+• 63 (WScore): Kazanan takım 63 sayı attı
+• 1234 (LTeamID): Kaybeden takım ID
+• 54 (LScore): Kaybeden takım 54 sayı attı
+• N (WLoc): Neutral (Tarafsız saha)
+
+
+────────────────────────────────────────────────────────────────────────────
+7. DOSYA: MNCAATourneyDetailedResults.csv
+────────────────────────────────────────────────────────────────────────────
+AÇIKLAMA:
+Bu dosya analiz için 5. dosyayla birlikte kullanabileceğimiz en mantıklı dosyalardan
+bir tanesi. Çünkü dosyanın içinde detaylı basketbol istatistikleri var ve 2003'ten
+günümüze kadar gidiyor. Bazı değişkenler W (Winning) ile, bazıları L (Losing) ile
+başlıyor - kazanan ve kaybeden takım istatistikleri için.
+
+DEĞİŞKENLER TABLOSU:
+┌───────────┬─────────────────────────────────────────────────────────────┐
+│ Değişken  │ Açıklama                                                     │
+├───────────┼─────────────────────────────────────────────────────────────┤
+│ Season    │ Sezon yılı                                                   │
+│ DayNum    │ Sezonun kaçıncı günü                                         │
+│ WTeamID   │ Kazanan takım ID'si                                          │
+│ WScore    │ Kazanan takım skoru                                          │
+│ LTeamID   │ Kaybeden takım ID'si                                         │
+│ LScore    │ Kaybeden takım skoru                                         │
+│ WLoc      │ Maç konumu                                                   │
+│ NumOT     │ Uzatma sayısı                                                │
+│ WFGM/LFGM │ Field Goals Made - İsabetli atış sayısı                      │
+│ WFGA/LFGA │ Field Goals Attempted - Toplam şut denemesi                  │
+│ WFGM3/... │ 3-Pointers Made - İsabetli 3lük sayısı                       │
+│ WFGA3/... │ 3-Pointers Attempted - Denenen 3lük                          │
+│ WFTM/LFTM │ Free Throws Made - İsabetli serbest atış                     │
+│ WFTA/LFTA │ Free Throws Attempted - Denenen serbest atış                 │
+│ WOR/LOR   │ Offensive Rebounds - Hücum ribaundu                          │
+│ WDR/LDR   │ Defensive Rebounds - Savunma ribaundu                        │
+│ WAst/LAst │ Assists - Asist sayısı                                       │
+│ WTO/LTO   │ Turnovers - Top kaybı                                        │
+│ WStl/LStl │ Steals - Top çalma                                           │
+│ WBlk/LBlk │ Blocks - Blok sayısı                                         │
+│ WPF/LPF   │ Personal Fouls - Faul sayısı                                 │
+└───────────┴─────────────────────────────────────────────────────────────┘
+
+VERİ ÖRNEĞİ:
+┌──────────┬───────┬─────────┬─────────┬────────┬────────┬──────┬──────┐
+│ 2003     │ 134   │ 1421    │ 92      │ 1411   │ 84     │ N    │ 1    │
+│ (OT:1)   │       │ (Kazanan│ 92 sayı │ Kaybeden│ 84 sayı│ N    │      │
+├──────────┴───────┴─────────┴─────────┴────────┴────────┴──────┴──────┤
+│ KAZANAN İSTATİSTİKLERİ:                                              │
+│ WFGM:32 WFGA:69 WFGM3:11 WFGA3:29 WFTM:17 WFTA:26                       │
+│ WOR:14 WDR:30 WAst:17 WTO:12 WStl:5 WBlk:3 WPF:22                      │
+├────────────────────────────────────────────────────────────────────────┤
+│ KAYBEDEN İSTATİSTİKLERİ:                                             │
+│ LFGM:29 LFGA:67 LFGM3:12 LFGA3:31 LFTM:14 LFTA:31                       │
+│ LOR:17 LDR:28 LAst:16 LTO:15 LStl:5 LBlk:0 LPF:22                      │
+└────────────────────────────────────────────────────────────────────────┘
+
+
+────────────────────────────────────────────────────────────────────────────
+8. DOSYA: MNCAATourneySeedRoundSlots.csv
+────────────────────────────────────────────────────────────────────────────
+AÇIKLAMA:
+Bu dosya turnuva yapısının "haritasını" çizer. March Madness turnuvası 6 turdan
+oluşur ve her tur için hangi seed'lerin (kuraların) hangi slotlarda oynayacağını
+belirler.
+
+Örneğin: W01 seed'i 1. turda R1W1 slotunda oynar, kazanırsa 2. turda R2W1
+slotunda oynar. Bu dosya o geçişi gösterir.
+
+Turnuva ağacını anlamak için kritik bir dosyadır. Hangi aşamada hangi maçların
+oynanacağını ve hangi seed'lerin karşılaşacağını belirler.
+
+DEĞİŞKENLER TABLOSU:
+┌─────────────┬──────────────────────────────────────────────────────────┐
+│ Değişken    │ Açıklama                                                  │
+├─────────────┼──────────────────────────────────────────────────────────┤
+│ Seed        │ Kura sırası / Torba (W01, X16 gibi)                       │
+│ GameRound   │ Tur numarası (0=First Four, 1-6 ana tur)                  │
+│ GameSlot    │ Turnuva ağacındaki eşleşme kodu (R1W1 gibi)               │
+│ EarlyDayNum │ O turun erken oynanma günü                                │
+│ LateDayNum  │ O turun geç oynanma günü                                  │
+└─────────────┴──────────────────────────────────────────────────────────┘
+
+VERİ ÖRNEĞİ:
+┌───────┬───────────┬──────────┬─────────────┬────────────┐
+│ Seed  │ GameRound │ GameSlot │ EarlyDayNum │ LateDayNum │
+├───────┼───────────┼──────────┼─────────────┼────────────┤
+│ W01   │ 1         │ R1W1     │ 136         │ 137        │
+│ W01   │ 2         │ R2W1     │ 138         │ 139        │
+└───────┴───────────┴──────────┴─────────────┴────────────┘
+
+TUR AÇIKLAMASI:
+┌─────────┬──────────────────────────────────────────────┐
+│ Round   │ Açıklama                                      │
+├─────────┼──────────────────────────────────────────────┤
+│ 0       │ First Four (Eleme maçları)                    │
+│ 1       │ Son 64 Takım (İlk tur)                        │
+│ 2       │ Son 32 Takım                                  │
+│ 3       │ Sweet Sixteen (16'li)                         │
+│ 4       │ Elite Eight (8'li)                            │
+│ 5       │ Final Four (Dörtlü Final)                     │
+│ 6       │ Championship (Final)                          │
+└─────────┴──────────────────────────────────────────────┘
+
+
+────────────────────────────────────────────────────────────────────────────
+9. DOSYA: MNCAATourneySeeds.csv
+────────────────────────────────────────────────────────────────────────────
+AÇIKLAMA:
+Bu dosya turnuvaya katılan 64 takımın her birinin "seed" (seribaşı) numarasını
+gösterir. Seed sistemi turnuvanın temelini oluşturur.
+
+Her sezon 64 takım turnuvaya katılır:
+• 4 bölge (W, X, Y, Z) × 16 takım = 64 takım
+• Her bölgede 1-16 arası seed'ler var
+• 1 seed en güçlü, 16 seed en zayıf kabul edilir
+
+Bu dosya ile öğrenebiliriz:
+• Hangi takım turnuvaya katılmış (TeamID → Seed)
+• Hangi seed hangi bölgede yer alıyor
+• Takımın turnuvadaki "güç durumu"
+
+Tahmin modeli için kritik öneme sahiptir çünkü seed farkı (örn: 1 vs 16)
+maç sonucunu büyük ölçüde etkiler.
+
+DEĞİŞKENLER TABLOSU:
+┌────────┬────────────────────────────────────────────────────────────────┐
+│ Değişken│ Açıklama                                                        │
+├────────┼────────────────────────────────────────────────────────────────┤
+│ Season │ Sezon yılı                                                      │
+│ Seed   │ Kura kodu (Bölge + Numara)                                     │
+│ TeamID │ Takım ID'si                                                     │
+└────────┴────────────────────────────────────────────────────────────────┘
+
+VERİ ÖRNEĞİ:
+┌────────┬───────┬────────┐
+│ Season │ Seed  │ TeamID │
+├────────┼───────┼────────┤
+│ 1985   │ W01   │ 1207   │
+│ 1985   │ W02   │ 1210   │
+│ 1985   │ W03   │ 1228   │
+│ 1985   │ W04   │ 1260   │
+│ 1985   │ W10   │ 1323   │
+│ 1985   │ W11   │ 1348   │
+│ 1985   │ W12   │ 1235   │
+│ 1985   │ W13   │ 1350   │
+│ 1985   │ W14   │ 1299   │
+│ 1985   │ W15   │ 1131   │
+└────────┴───────┴────────┘
+
+SEED (KURA) KODU ANLAMI:
+┌────────────────────────────────────────────────────────────────────────┐
+│ Format: [Bölge][Sıra]                                                   │
+│                                                                        │
+│ Bölgeler:  W, X, Y, Z (West, East, South, Midwest - sıralaması değişir)│
+│ Sıra:      01-16 arası (1=en güçlü, 16=en zayıf)                        │
+│                                                                        │
+│ Örnekler:                                                              │
+│ • W01 → Batı bölgesi, 1. seribağı (en güçlü)                           │
+│ • W10 → Batı bölgesi, 10. seribağı                                      │
+│ • X16 → X bölgesi, 16. seribağı (en zayıf)                              │
+└────────────────────────────────────────────────────────────────────────┘
+
+EŞLEŞME MANTIĞI:
+┌────────────────────────────────────────────────────────────────────────┐
+│ 1 vs 16, 2 vs 15, 3 vs 14, 4 vs 13, 5 vs 12, 6 vs 11, 7 vs 10, 8 vs 9 │
+└────────────────────────────────────────────────────────────────────────┘
+
+
+────────────────────────────────────────────────────────────────────────────
+10. DOSYA: MNCAATourneySlots.csv
+────────────────────────────────────────────────────────────────────────────
+AÇIKLAMA:
+Bu dosya turnuva ağacındaki "eşleşme kurallarını" tanımlar. Her slot'ta hangi
+seed'lerin karşılaşacağını belirler.
+
+Örneğin:
+• R1W1 slotunda W01 ile W16 karşılaşır (1 vs 16)
+• R1W2 slotunda W02 ile W15 karşılaşır (2 vs 15)
+
+Kazanan takım bir sonraki tura geçer ve下一 slot'ta karşılaşma yapar.
+Bu dosya tüm bu geçişleri tanımlar.
+
+Kullanım amacı:
+• Turnuva ağacını çizmek için
+• Hangi maçın hangi turda oynacağını belirlemek için
+• Simülasyon yaparken eşleşmeleri oluşturmak için
+
+Bu dosya + 9. dosya (Seeds) + 6. dosya (Results) birleştiğinde turnuvanın
+tüm历史ini yeniden oluşturabilirsiniz.
+
+DEĞİŞKENLER TABLOSU:
+┌───────────┬──────────────────────────────────────────────────────────────┐
+│ Değişken  │ Açıklama                                                      │
+├───────────┼──────────────────────────────────────────────────────────────┤
+│ Season    │ Sezon yılı                                                    │
+│ Slot      │ Eşleşme slotu (R1W1, R2W1 gibi)                              │
+│ StrongSeed │ Güçlü seed (düşük numara)                                    │
+│ WeakSeed   │ Zayıf seed (yüksek numara)                                   │
+└───────────┴──────────────────────────────────────────────────────────────┘
+
+VERİ ÖRNEĞİ:
+┌────────┬────────┬────────────┬───────────┐
+│ Season │ Slot   │ StrongSeed │ WeakSeed  │
+├────────┼────────┼────────────┼───────────┤
+│ 1985   │ R1W1   │ W01        │ W16       │
+│ 1985   │ R1W2   │ W02        │ W15       │
+└────────┴────────┴────────────┴───────────┘
+
+SLOT KODLARI:
+┌──────────┬──────────────────────────────────────────────────────┐
+│ Slot     │ Açıklama                                              │
+├──────────┼──────────────────────────────────────────────────────┤
+│ R1W1     │ Round 1, West 1 - 1. tur, batı bölgesi 1. eşleşme     │
+│ R2W1     │ Round 2, West 1 - 2. tur, batı bölgesi 1. eşleşme     │
+└──────────┴──────────────────────────────────────────────────────┘
+
+
+────────────────────────────────────────────────────────────────────────────
+11. DOSYA: MRegularSeasonCompactResults.csv
+────────────────────────────────────────────────────────────────────────────
+AÇIKLAMA:
+Bu dosya "Normal Sezon" maçlarının tüm sonuçlarını içerir. Turnuva öncesi
+oynanan tüm maçlar buradadır - binlerce maç!
+
+Önemli noktalar:
+• Turnuva dışındaki tüm maçlar (konferans maçları, inter-conference maçları)
+• Her sezonda yaklaşık 4,000-5,000 maç var
+• DayNum genelde 0-132 arası (turnuva 132. civarı başlar)
+• Takımların güçlerini ölçmek için en veri kaynaklı dosya
+
+WLoc (Maç Konumu) anlamı:
+• H = Home (Ev sahibi kazandı - ev sahibi avantajı)
+• A = Away (Deplasman kazandı - deplasman zorluğu)
+• N = Neutral (Tarafsız saha - avantajsız)
+
+Bu dosya, takımların turnuva öncesi performansını analiz etmek için
+kritik önem taşır. Normal sezon başarısı turnuva başarısını
+yordamak için kullanılır.
+
+DEĞİŞKENLER TABLOSU:
+┌──────────┬─────────────────────────────────────────────────────────────┐
+│ Değişken │ Açıklama                                                    │
+├──────────┼─────────────────────────────────────────────────────────────┤
+│ Season   │ Sezon yılı                                                  │
+│ DayNum   │ Sezonun kaçıncı günü (0-132 arası)                          │
+│ WTeamID  │ Kazanan takım ID'si                                         │
+│ WScore   │ Kazanan takım skoru                                         │
+│ LTeamID  │ Kaybeden takım ID'si                                        │
+│ LScore   │ Kaybeden takım skoru                                        │
+│ WLoc     │ Maç konumu (N=Neutral, H=Home, A=Away)                      │
+│ NumOT    │ Uzatma sayısı                                               │
+└──────────┴─────────────────────────────────────────────────────────────┘
+
+VERİ ÖRNEĞİ:
+┌────────┬────────┬──────────┬─────────┬──────────┬─────────┬──────┬────────┐
+│ Season │ DayNum │ WTeamID  │ WScore  │ LTeamID  │ LScore  │ WLoc │ NumOT  │
+├────────┼────────┼──────────┼─────────┼──────────┼─────────┼──────┼────────┤
+│ 1985   │ 20     │ 1228     │ 81      │ 1328     │ 64      │ N    │ 0      │
+└────────┴────────┴──────────┴─────────┴──────────┴─────────┴──────┴────────┘
+
+
+────────────────────────────────────────────────────────────────────────────
+12. DOSYA: MSeasons.csv
+────────────────────────────────────────────────────────────────────────────
+AÇIKLAMA:
+Bu dosya her sezonun "metadata"sını içerir - sezonun temel bilgileri.
+
+DayZero: Sezonun referans tarihi. Tüm DayNum değerleri bu tarihe göre hesaplanır.
+Örneğin DayZero = 10/29/1984 ise, DayNum 136 = 10/29/1984 + 136 gün.
+
+RegionW/X/Y/Z: Turnuvanın 4 bölgesinin adları. Bu isimler yıllara göre değişir:
+• 1985-2003 arası: East, West, Midwest, Southeast gibi klasik adlar
+• 2004-2006 arası: Şehir isimleri (Atlanta, Phoenix, Chicago, Syracuse gibi)
+• 2007+ tekrar bölge adları
+
+Önemli: 2020 sezonu "NA1, NA2, NA3, NA4" gösteriyor - COVID-19 nedeniyle
+turnuva iptal edildi.
+
+2026 sezonu "TBD1, TBD2, TBD3, TBD4" - henüz belirlenmemiş (To Be Determined).
+
+Bu dosya, tarih hesaplamaları ve bölge analizi için gereklidir.
+
+DEĞİŞKENLER TABLOSU:
+┌───────────┬──────────────────────────────────────────────────────────────┐
+│ Değişken  │ Açıklama                                                     │
+├───────────┼──────────────────────────────────────────────────────────────┤
+│ Season    │ Sezon yılı                                                   │
+│ DayZero   │ Sezonun "0. günü" olarak kabul edilen tarih                  │
+│ RegionW   │ Batı bölgesi adı veya şehir                                  │
+│ RegionX   │ X bölgesi adı veya şehir                                     │
+│ RegionY   │ Y bölgesi adı veya şehir                                     │
+│ RegionZ   │ Z bölgesi adı veya şehir                                     │
+└───────────┴──────────────────────────────────────────────────────────────┘
+
+VERİ ÖRNEĞİ:
+┌────────┬────────────┬──────────┬──────────┬──────────┬──────────┐
+│ Season │ DayZero    │ RegionW  │ RegionX  │ RegionY  │ RegionZ  │
+├────────┼────────────┼──────────┼──────────┼──────────┼──────────┤
+│ 1985   │ 10/29/1984 │ East     │ West     │ Midwest  │ Southeast│
+│ 1986   │ 10/28/1985 │ East     │ Midwest  │ Southeast│ West     │
+│ 2025   │ 11/04/2024 │ East     │ Midwest  │ South    │ West     │
+│ 2026   │ 11/03/2025 │ TBD1     │ TBD2     │ TBD3     │ TBD4     │
+└────────┴────────────┴──────────┴──────────┴──────────┴──────────┘
+
+
+────────────────────────────────────────────────────────────────────────────
+13. DOSYA: MTeams.csv
+────────────────────────────────────────────────────────────────────────────
+AÇIKLAMA:
+Bu dosya tüm takımların "kimlik kartı"dır. NCAA Division 1 basketbolunda
+hiç oynamış 400+ takım listelenir.
+
+TeamID: Takımın benzersiz numarası. Tüm dosyalarda bu ID ile referans verilir.
+Örneğin TeamID 1104 her zaman "Alabama" takımını ifade eder.
+
+TeamName: Takımın kısaltılmış adı (max 16 karakter).
+• "Abilene Chr" = Abilene Christian
+• "Air Force" = Air Force Academy
+• "Alabama" = University of Alabama
+
+FirstD1Season / LastD1Season:
+Takımın Division 1'de oynadığı dönem.
+• 1101 (Abilene Chr): 2014-2026 → 2014'ten beri D1'de
+• 1102 (Air Force): 1985-2026 → 1985'ten beri D1'de
+• Bir takım 2026'ya bitiyorsa hala aktif demektir
+
+Bu dosya, takım isimlerini çözümlemek için gereklidir. Diğer tüm dosyalardaki
+TeamID'leri gerçek isimlere eşleştirmek için kullanılır.
+
+DEĞİŞKENLER TABLOSU:
+┌───────────────┬──────────────────────────────────────────────────────────┐
+│ Değişken      │ Açıklama                                                 │
+├───────────────┼──────────────────────────────────────────────────────────┤
+│ TeamID        │ Takımın benzersiz kimlik numarası                        │
+│ TeamName      │ Takım adı                                                │
+│ FirstD1Season │ İlk Division 1 sezonu                                    │
+│ LastD1Season  │ Son Division 1 sezonu                                    │
+└───────────────┴──────────────────────────────────────────────────────────┘
+
+VERİ ÖRNEĞİ:
+┌────────┬─────────────────┬───────────────┬──────────────┐
+│ TeamID │ TeamName        │ FirstD1Season │ LastD1Season │
+├────────┼─────────────────┼───────────────┼──────────────┤
+│ 1101   │ Abilene Chr     │ 2014          │ 2026         │
+│ 1102   │ Air Force       │ 1985          │ 2026         │
+│ 1103   │ Akron           │ 1985          │ 2026         │
+│ 1104   │ Alabama         │ 1985          │ 2026         │
+└────────┴─────────────────┴───────────────┴──────────────┘
+
+
+────────────────────────────────────────────────────────────────────────────
+14. DOSYA: MTeamCoaches.csv
+────────────────────────────────────────────────────────────────────────────
+AÇIKLAMA:
+Bu dosya koç değişikliklerini ve koç performansını takip etmek için kullanılır.
+
+Amerikan kolej basketbolunda koç çok önemlidir - bazı koçlar programı yıllarca
+yönetir ve takımın kimliğini belirler.
+
+FirstDayNum / LastDayNum:
+Koçun sezon içinde görev yaptığı dönem.
+• Örnek: 0-154 → sezon başından sonuna kadar
+• Örnek: 50-120 → sezon ortasında geldi, sezon bitmeden ayrıldı
+
+CoachName: Koçun adı (underscore ile yazılır, küçük harf).
+• "reggie_minton" → Reggie Minton
+• "bob_huggins" → Bob Huggins
+• "mike_krzzewski" → Mike Krzyzewski (efsane koç)
+
+Kullanım alanları:
+• Koç değişikliğinin takım performansına etkisi
+• Deneyimli koç vs yeni koç analizi
+• Koçun geçmiş başarıları
+
+Bu dosya gelişmiş analizler için opsiyoneldir.
+
+DEĞİŞKENLER TABLOSU:
+┌────────────┬────────────────────────────────────────────────────────────┐
+│ Değişken   │ Açıklama                                                   │
+├────────────┼────────────────────────────────────────────────────────────┤
+│ Season     │ Sezon yılı                                                 │
+│ TeamID     │ Takım ID'si                                                │
+│ FirstDayNum│ Koçun başladığı gün                                        │
+│ LastDayNum │ Koçun bittiği gün                                          │
+│ CoachName  │ Koçun adı                                                  │
+└────────────┴────────────────────────────────────────────────────────────┘
+
+VERİ ÖRNEĞİ:
+┌────────┬────────┬─────────────┬────────────┬────────────────┐
+│ Season │ TeamID │ FirstDayNum │ LastDayNum │ CoachName      │
+├────────┼────────┼─────────────┼────────────┼────────────────┤
+│ 1985   │ 1102   │ 0           │ 154        │ reggie_minton  │
+│ 1985   │ 1103   │ 0           │ 154        │ bob_huggins    │
+└────────┴────────┴─────────────┴────────────┴────────────────┘
+
+
+────────────────────────────────────────────────────────────────────────────
+15. DOSYA: MTeamConferences.csv
+────────────────────────────────────────────────────────────────────────────
+AÇIKLAMA:
+Bu dosya her takımın hangi konferansta yer aldığını gösterir. Konferans bilgisi
+turnuva elemeleri ve takım güç analizi için çok önemlidir.
+
+NCAA'de 32+ konferans var ve her konferansın kendi turnuvası var:
+• Konferans turnuvasını kazanan → Otomatik turnuvaya katılır
+• Güçlü konferanslar (ACC, Big Ten, SEC) → Çoklu turnuva katılımı
+• Zayıf konferanslar → Genelde sadece 1 takım gönderebilir
+
+ConfAbbrev: Konferans kısaltması (Dosya #2'deki Conferences.csv ile eşleşir)
+• "acc" → Atlantic Coast Conference (çok güçlü)
+• "sec" → Southeastern Conference (çok güçlü)
+• "ovc" → Ohio Valley Conference (daha zayıf)
+
+Kullanım alanları:
+• Takımın konferans gücünü ölçmek
+• Konferans turnuvası sonrası performans değişimi
+• Güçlü konferans vs zayıf konferans takımı karşılaştırması
+
+Bu dosya, takımları sınıflandırmak için kritik öneme sahiptir.
+
+DEĞİŞKENLER TABLOSU:
+┌──────────┬─────────────────────────────────────────────────────────────┐
+│ Değişken │ Açıklama                                                     │
+├──────────┼─────────────────────────────────────────────────────────────┤
+│ Season   │ Sezon yılı                                                   │
+│ TeamID   │ Takım ID'si                                                  │
+│ ConfAbbrev│ Konferans kısaltması                                         │
+└──────────┴─────────────────────────────────────────────────────────────┘
+
+VERİ ÖRNEĞİ:
+┌────────┬────────┬────────────┐
+│ Season │ TeamID │ ConfAbbrev │
+├────────┼────────┼────────────┤
+│ 1985   │ 1102   │ wac        │
+│ 1985   │ 1103   │ ovc        │
+└────────┴────────┴────────────┘
+
+
+────────────────────────────────────────────────────────────────────────────
+16. DOSYA: MRegularSeasonDetailedResults.csv
+────────────────────────────────────────────────────────────────────────────
+AÇIKLAMA:
+Bu dosya Normal Sezon maçlarının DETAYLI istatistiklerini içerir. Dosya #7'nin
+(MNCAATourneyDetailedResults) normal sezon versiyonudur.
+
+Farkı nedir?
+• Dosya #7 → Sadece turnuva maçları (2003-2026)
+• Bu dosya → Normal sezon maçları (2003-2026)
+• İkisi de aynı istatistikleri içerir
+
+Neden bu dosya çok değerli?
+• Normal sezonda ~5,000 maç/yıl × 24 yıl = ~120,000 maç
+• Her maç için 34 detaylı istatistik
+• Toplam ~4 milyon veri noktası!
+• Takım güçlerini hesaplamak için en zengin veri kaynağı
+
+Ne tür istatistikler var?
+• Şut isabetleri (Field Goals)
+• 3 sayılık atışlar
+• Serbest atışlar
+• Ribaundlar (Hücum + Savunma)
+• Asistler
+• Top kaybı (Turnover)
+• Top çalmalar (Steals)
+• Bloklar
+• Faul sayıları
+
+Bu istatistiklarla şunları yapabilirsiniz:
+• Takımın真实 gücünü hesaplamak (sadece skor değil)
+• Ofansif/defansif efektiflik
+• Şut yüzdesi analizi
+• Ribaund dominasyonu
+• Advanced metrics (Net Rating, PIE, etc.)
+
+Tahmin modeli için bu dosya ALTIN değerindedir. Turnuvadan önceki performans
+en iyi tahmin göstergesidir ve bu dosya o performansın tüm detaylarını içerir.
+
+DEĞİŞKENLER TABLOSU:
+┌───────────┬──────────────────────────────────────────────────────────────┐
+│ Değişken  │ Açıklama                                                     │
+├───────────┼──────────────────────────────────────────────────────────────┤
+│ Season    │ Sezon yılı                                                   │
+│ DayNum    │ Sezonun kaçıncı günü                                         │
+│ WTeamID   │ Kazanan takım ID'si                                          │
+│ WScore    │ Kazanan takım skoru                                          │
+│ LTeamID   │ Kaybeden takım ID'si                                         │
+│ LScore    │ Kaybeden takım skoru                                         │
+│ WLoc      │ Maç konumu (N/H/A)                                           │
+│ NumOT     │ Uzatma sayısı                                                │
+│ WFGM/LFGM │ Field Goals Made - İsabetli atış (2+3 sayılık)              │
+│ WFGA/LFGA │ Field Goals Attempted - Toplam şut denemesi                 │
+│ WFGM3/... │ 3-Pointers Made - İsabetli 3lük                              │
+│ WFGA3/... │ 3-Pointers Attempted - Denenen 3lük                         │
+│ WFTM/LFTM │ Free Throws Made - İsabetli serbest atış                    │
+│ WFTA/LFTA │ Free Throws Attempted - Denenen serbest atış                │
+│ WOR/LOR   │ Offensive Rebounds - Hücum ribaundu                          │
+│ WDR/LDR   │ Defensive Rebounds - Savunma ribaundu                        │
+│ WAst/LAst │ Assists - Asist sayısı                                       │
+│ WTO/LTO   │ Turnovers - Top kaybı                                        │
+│ WStl/LStl │ Steals - Top çalma                                           │
+│ WBlk/LBlk │ Blocks - Blok sayısı                                         │
+│ WPF/LPF   │ Personal Fouls - Faul sayısı                                 │
+└───────────┴──────────────────────────────────────────────────────────────┘
+
+VERİ ÖRNEĞİ (2003 sezonu, 10. gün):
+┌──────────┬───────┬─────────┬─────────┬────────┬────────┬──────┬──────┐
+│ 2003     │ 10    │ 1104    │ 68      │ 1328   │ 62     │ N    │ 0    │
+├──────────┴───────┴─────────┴─────────┴────────┴────────┴──────┴──────┤
+│ KAZANAN (1104 - Alabama):                                              │
+│ WFGM:27 WFGA:58 │ WFGM3:3 WFGA3:14 │ WFTM:11 WFTA:18                   │
+│ WOR:14 WDR:24 │ WAst:13 WTO:23 │ WStl:7 WBlk:1 WPF:22                  │
+├────────────────────────────────────────────────────────────────────────┤
+│ KAYBEDEN (1328):                                                      │
+│ LFGM:22 LFGA:53 │ LFGM3:2 LFGA3:10 │ LFTM:16 LFTA:22                   │
+│ LOR:10 LDR:22 │ LAst:8 LTO:18 │ LStl:9 LBlk:2 LPF:20                   │
+└────────────────────────────────────────────────────────────────────────┘
+
+BÖLÜMSEL ANALİZ (Yukarıdaki örneğe göre):
+┌─────────────────┬──────────┬──────────┬────────────────────────┐
+│ Metrik          │ Kazanan  │ Kaybeden │ Açıklama                │
+├─────────────────┼──────────┼──────────┼────────────────────────┤
+│ Şut Yüzdesi     │ %46.6    │ %41.5    │ 27/58 vs 22/53          │
+│ 3lük Yüzdesi    │ %21.4    │ %20.0    │ 3/14 vs 2/10            │
+│ Serbest Atış    │ %61.1    │ %72.7    │ 11/18 vs 16/22          │
+│ Toplam Ribaund  │ 38       │ 32       │ (14+24) vs (10+22)      │
+│ Asist/TO Ratio │ 0.57     │ 0.44     │ 13/23 vs 8/18           │
+└─────────────────┴──────────┴──────────┴────────────────────────┘
+
+
+────────────────────────────────────────────────────────────────────────────
+17. DOSYA: MSecondaryTourneyCompactResults.csv
+────────────────────────────────────────────────────────────────────────────
+AÇIKLAMA:
+Bu dosya "Secondary Tourney" (İkincil Turnuva) maçlarını içerir. Bunlar NCAA
+March Madness turnuvasının DEĞİL, ama yine prestijli turnuvalardır.
+
+NCAA'de turnuva sistemi şöyledir:
+1. NCAA Tournament (March Madness) - Ana turnuva - 64 takım
+2. Secondary Tournaments - Konsolasyon turnuvaları - Turnuvaya KATILAMAYAN
+   güçlü takımlar için
+
+Ünlü Secondary Tournaments:
+┌────────────────────────────────────────────────────────────────────────────┐
+│ Turnuva Adı              │ Açıklama                                       │
+├────────────────────────────────┼───────────────────────────────────────────┤
+│ NIT (National Invitational) │ En prestijli secondary turnuva               │
+│ CBI (College Basketball Invitational) │ Daha yeni turnuva             │
+│ CIT (CollegeInsider.com)   │ Daha yeni turnuva                             │
+└────────────────────────────────┴───────────────────────────────────────────┘
+
+Neden bu dosya önemli?
+• Turnuvaya KATILAMAYAN takımların performansını gösterir
+• "Neredeyse turnuvadaydı" takımları için referans
+• Konferans güçlerini karşılaştırmak için ek veri
+• Takım moralini ve sezon sonu momentumunu ölçmek
+
+Örneğin: Güçlü bir konferanstan turnuvaya sıcağınamamış ama NIT'i
+kazanmış bir takım, aslında güçlü olabilir. Bu bilgi tahmin modelinde
+işe yarayabilir.
+
+DEĞİŞKENLER TABLOSU:
+┌───────────────────┬────────────────────────────────────────────────────────┐
+│ Değişken          │ Açıklama                                             │
+├───────────────────┼────────────────────────────────────────────────────────┤
+│ Season            │ Sezon yılı                                           │
+│ DayNum            │ Sezonun kaçıncı günü                                 │
+│ WTeamID           │ Kazanan takım ID'si                                  │
+│ WScore            │ Kazanan takım skoru                                  │
+│ LTeamID           │ Kaybeden takım ID'si                                 │
+│ LScore            │ Kaybeden takım skoru                                 │
+│ WLoc              │ Maç konumu (N/H/A)                                   │
+│ NumOT             │ Uzatma sayısı                                        │
+│ SecondaryTourney  │ Turnuva adı (NIT, CBI, CIT vb.)                       │
+└───────────────────┴────────────────────────────────────────────────────────┘
+
+VERİ ÖRNEĞİ:
+┌────────┬────────┬──────────┬─────────┬──────────┬─────────┬──────┬────────┬────────┐
+│ Season │ DayNum │ WTeamID  │ WScore  │ LTeamID  │ LScore  │ WLoc │ NumOT  │ SecondaryTourney│
+├────────┼────────┼──────────┼─────────┼──────────┼─────────┼──────┼────────┼────────┤
+│ 1985   │ 136    │ 1151     │ 67      │ 1155     │ 65      │ H    │ 0      │ NIT    │
+│ 1985   │ 136    │ 1153     │ 77      │ 1245     │ 61      │ H    │ 0      │ NIT    │
+└────────┴────────┴──────────┴─────────┴──────────┴─────────┴──────┴────────┴────────┘
+
+KULLANIM SENARYOLARI:
+┌────────────────────────────────────────────────────────────────────────────┐
+│ Senaryo                        │ Bu dosya nasıl yardımcı olur?              │
+├────────────────────────────────┼───────────────────────────────────────────┤
+│ Turnuvaya gidemeyen güçlü takım │ NIT performansını kontrol et              │
+│ Konferans karşılaştırması        │ Aynı konferanstan NIT'e giden takımlar    │
+│ Sezon sonu momentum             │ Secondary tourney kazananı morale bak     │
+│ "Bubble team" analizi           │ Turnuva sınırında olan takımları değerlendir│
+└────────────────────────────────┴───────────────────────────────────────────┘
+
+
+────────────────────────────────────────────────────────────────────────────
+18. DOSYA: MSecondaryTourneyTeams.csv
+────────────────────────────────────────────────────────────────────────────
+AÇIKLAMA:
+Bu dosya hangi takımın hangi secondary turnuvaya katıldığını gösterir.
+Dosya #17'nin (Results) tamamlayıcısıdır - hangi takımların bu turnuvalarda
+yer ALDIĞI'nı listeler.
+
+Neden bu dosya var?
+• Dosya #17 sadece maç sonuçlarını içerir
+• Bu dosya ise KATILIM listesini içerir
+• Bazı takımlar turnuvaya katılır ama maç kazanamaz (ilk turda eler)
+• Bu takımlar Results dosyasında görünür ama hangi turnuvaya katıldıkları
+• buradan anlaşılır
+
+Kullanım alanları:
+• Hangi takımın hangi turnuvaya katıldığını hızlıca bulmak
+• Turnuva katılımlarını yıllara göre analiz etmek
+• Konferans bazında secondary turnuva temsili
+
+DEĞİŞKENLER TABLOSU:
+┌──────────────────┬─────────────────────────────────────────────────────────┐
+│ Değişken         │ Açıklama                                             │
+├──────────────────┼─────────────────────────────────────────────────────────┤
+│ Season           │ Sezon yılı                                           │
+│ SecondaryTourney │ Turnuva adı (NIT, CBI, CIT vb.)                        │
+│ TeamID           │ Takım ID'si                                          │
+└──────────────────┴─────────────────────────────────────────────────────────┘
+
+VERİ ÖRNEĞİ:
+┌────────┬──────────────────┬────────┐
+│ Season │ SecondaryTourney │ TeamID │
+├────────┼──────────────────┼────────┤
+│ 1985   │ NIT              │ 1108   │
+│ 1985   │ NIT              │ 1133   │
+│ 1985   │ NIT              │ 1139   │
+│ 1985   │ NIT              │ 1145   │
+└────────┴──────────────────┴────────┘
+
+SECONDARY TOURNEY'LER YILLARA GÖRE:
+┌───────┬────────────────────────────────────────────────────────────────────┐
+│ NIT   │ 1985'ten beri devam ediyor - en geleneksel secondary turnuva     │
+│ CBI   │ 2008'den beri - daha yeni                                          │
+│ CIT   │ 2009'dan beri - daha yeni                                          │
+└───────┴────────────────────────────────────────────────────────────────────┘
+
+Bu dosya genelde gelişmiş analizlerde kullanılır - turnuva dışındaki takımları
+değerlendirmek için.
+
+
+────────────────────────────────────────────────────────────────────────────
+19. DOSYA: MTeamSpellings.csv
+────────────────────────────────────────────────────────────────────────────
+AÇIKLAMA:
+Bu dosya takım isimlerinin farklı yazılım varyasyonlarını içerir. Basit ama
+güçlü bir "eşleştirme" dosyasıdır.
+
+Neden bu dosya gerekli?
+Takım isimleri farklı kaynaklarda FARKLI yazılabilir:
+• "Abilene Christian"
+• "Abilene Chr"
+• "abilene christian"
+• "abilene-christian"
+
+Hepsinin hepsi AYNI takımı ifade eder (TeamID 1101). Bu dosya tüm bu
+varyasyonları resmi TeamID'ye bağlar.
+
+Kullanım senaryoları:
+• Web scraping'den gelen verileri standartlaştırmak
+• Farklı kaynaklardan gelen verileri birleştirmek
+• Kullanıcı girdilerini doğru TeamID'ye eşleştirmek
+• Yazım hatalarını toleranslamak
+
+DEĞİŞKENLER TABLOSU:
+┌───────────────────┬────────────────────────────────────────────────────────┐
+│ Değişken          │ Açıklama                                             │
+├───────────────────┼────────────────────────────────────────────────────────┤
+│ TeamNameSpelling  │ Takım isminin bir varyasyonu (küçük harf, tire vb.)   │
+│ TeamID            │ Bu ismin karşılığı gelen resmi TeamID                  │
+└───────────────────┴────────────────────────────────────────────────────────┘
+
+VERİ ÖRNEĞİ:
+┌──────────────────────────┬────────┬────────────────────────────────────┐
+│ TeamNameSpelling         │ TeamID │ Açıklama                           │
+├──────────────────────────┼────────┼────────────────────────────────────┤
+│ a&m-corpus chris         │ 1394   │ Yazım hatası (christi eksik)       │
+│ a&m-corpus christi       │ 1394   │ Doğru yazım                         │
+│ abilene chr              │ 1101   │ Kısaltılmış                         │
+│ abilene christian        │ 1101   │ Tam ad                              │
+│ abilene-christian        │ 1101   │ Tire ile                            │
+│ air force                │ 1102   │ Küçük harfleri                      │
+│ air-force                │ 1102   │ Tire ile                            │
+│ akron                    │ 1103   │ Basit                               │
+│ alabama                  │ 1104   │ Basit                               │
+└──────────────────────────┴────────┴────────────────────────────────────┘
+
+NOTLAR:
+• Tüm isimler küçük harfle yazılır
+• Farklı ayırıcılar kullanılabilir (- tire, space boşluk)
+• Ama her varyasyon aynı TeamID'ye işaret eder
+
+Bu dosya veri temizleme ve eşleştirme işlemleri için çok yararlıdır.
+
+
+================================================================================
+                           ERKEK (M) DOSYALARI TAMAMLANDI
+                           Toplam: 19 Dosya Analiz Edildi
+================================================================================
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                    KADINLAR (W) DOSYALARI - BAŞLANGIÇ                      ║
+║              Not: W dosyaları M dosyalarına çok benzer                      ║
+║              Farklı olarak TeamID'ler 3xxx serisinden başlar                ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+
+────────────────────────────────────────────────────────────────────────────
+20. DOSYA: WTeams.csv
+────────────────────────────────────────────────────────────────────────────
+AÇIKLAMA:
+Kadınlar basketbol takımlarının listesi. M dosyalarındaki MTeams.csv'nin
+kadınlar versiyonudur.
+
+FARKLARI:
+• TeamID'ler 3xxx serisinden başlar (3101, 3102, ...)
+• M takımları 1xxx serisinden başlar (1101, 1102, ...)
+• Aynı isimde takımlar olsa bile ID'ler farklıdır
+
+ÖNEMLİ NOT:
+Aynı üniversitenin hem erkek hem kadın takımı olabilir:
+• Erkek: Alabama (TeamID 1104)
+• Kadın: Alabama (TeamID 3104)
+• Ama bunlar AYNI ID değil - ayrı takımlar
+
+DEĞİŞKENLER TABLOSU:
+┌───────────┬──────────────────────────────────────────────────────────────┐
+│ Değişken  │ Açıklama                                                     │
+├───────────┼──────────────────────────────────────────────────────────────┤
+│ TeamID    │ Takımın benzersiz kimlik numarası (3xxx serisi)              │
+│ TeamName  │ Takım adı                                                    │
+└───────────┴──────────────────────────────────────────────────────────────┘
+
+VERİ ÖRNEĞİ:
+┌────────┬─────────────────┐
+│ TeamID │ TeamName        │
+├────────┼─────────────────┤
+│ 3101   │ Abilene Chr     │
+│ 3102   │ Air Force       │
+│ 3103   │ Akron           │
+│ 3104   │ Alabama         │
+└────────┴─────────────────┘
+
+
+────────────────────────────────────────────────────────────────────────────
+21. DOSYA: WSeasons.csv
+────────────────────────────────────────────────────────────────────────────
+AÇIKLAMA:
+Kadınlar turnuvasının sezon bilgileri. MSeasons.csv'nin kadınlar versiyonudur.
+
+Bu dosya her sezon için referans tarihi ve bölge bilgilerini içerir. Kadınlar
+turnuvası 1998'den başladığı için erkeklerden daha az sezon verisi var.
+
+DayZero: Sezonun "0. günü" olarak kabul edilen tarih. Tüm DayNum değerleri bu
+tarihe göre hesaplanır. Örneğin DayZero = 10/27/1997 ise, DayNum 137 =
+10/27/1997 + 137 gün.
+
+RegionW/X/Y/Z: Turnuvanın 4 bölgesinin adları. Yıllara göre değişir:
+• 1998-2004: Klasik bölge adları (East, Midwest, Mideast, West)
+• 2005-2010: Şehir isimleri (Chattanooga, Tempe, Kansas City, Philadelphia)
+• 2011-2023: Tekrar bölge veya şehir isimleri karışık
+• 2021: "Alamo, Hemisfair, Mercado, RiverWalk" - özel isimlendirme
+
+ÖNEMLİ NOTLAR:
+• 2020 sezonu "NA1, NA2, NA3, NA4" - COVID-19 nedeniyle iptal
+• 2026 sezonu "TBD1, TBD2, TBD3, TBD4" - henüz belirlenmemiş
+
+DEĞİŞKENLER TABLOSU:
+┌───────────┬──────────────────────────────────────────────────────────────┐
+│ Değişken  │ Açıklama                                                     │
+├───────────┼──────────────────────────────────────────────────────────────┤
+│ Season    │ Sezon yılı                                                   │
+│ DayZero   │ Sezonun "0. günü" tarihi                                     │
+│ RegionW   │ Batı bölgesi adı veya şehir                                  │
+│ RegionX   │ X bölgesi adı veya şehir                                     │
+│ RegionY   │ Y bölgesi adı veya şehir                                     │
+│ RegionZ   │ Z bölgesi adı veya şehir                                     │
+└───────────┴──────────────────────────────────────────────────────────────┘
+
+VERİ ÖRNEĞİ:
+┌────────┬────────────┬──────────┬──────────┬──────────┬──────────┐
+│ Season │ DayZero    │ RegionW  │ RegionX  │ RegionY  │ RegionZ  │
+├────────┼────────────┼──────────┼──────────┼──────────┼──────────┤
+│ 1998   │ 10/27/1997 │ East     │ Midwest  │ Mideast  │ West     │
+│ 2005   │ 11/01/2004 │ Chattanooga│ Tempe  │ KansasCity│Philadelphia│
+│ 2020   │ 11/04/2019 │ NA1      │ NA2      │ NA3      │ NA4      │
+│ 2026   │ 11/03/2025 │ TBD1     │ TBD2     │ TBD3     │ TBD4     │
+└────────┴────────────┴──────────┴──────────┴──────────┴──────────┘
+
+NOT: 2020 (NA1-NA4) = COVID-19 iptali
+
+
+────────────────────────────────────────────────────────────────────────────
+22. DOSYA: WNCAATourneyCompactResults.csv
+────────────────────────────────────────────────────────────────────────────
+AÇIKLAMA:
+Kadınlar NCAA Turnuvası maç sonuçları. MNCAATourneyCompactResults.csv'nin
+kadınlar versiyonudur.
+
+Bu dosya kadınlar turnuvasındaki tüm maçları içerir - her sezon 63 maç
+(64 takım, 1 şampiyon). 1998'den 2026'ya kadar tüm turnuva maçları buradadır.
+
+DEĞİŞKENLER ERKEKLER İLE AYNI:
+• Season, DayNum, WTeamID, WScore, LTeamID, LScore
+• WLoc (Maç konumu), NumOT (Uzatma sayısı)
+
+TEK FARKLAR:
+• Takımlar 3xxx ID serisinden (Erkekler 1xxx)
+• Turnuva 1998'den beri (Erkekler 1985'ten)
+• Kadınlar turnuvası genelde tarafsız sahada oynanır (WLoc = N)
+
+DEĞİŞKENLER TABLOSU:
+┌──────────┬─────────────────────────────────────────────────────────────┐
+│ Değişken │ Açıklama                                                    │
+├──────────┼─────────────────────────────────────────────────────────────┤
+│ Season   │ Sezon yılı (1998-2026)                                      │
+│ DayNum   │ Sezonun kaçıncı günü                                        │
+│ WTeamID  │ Kazanan takım ID'si (3xxx)                                  │
+│ WScore   │ Kazanan takım skoru                                         │
+│ LTeamID  │ Kaybeden takım ID'si (3xxx)                                 │
+│ LScore   │ Kaybeden takım skoru                                        │
+│ WLoc     │ Maç konumu (N=Neutral, H=Home, A=Away)                      │
+│ NumOT    │ Uzatma sayısı                                               │
+└──────────┴─────────────────────────────────────────────────────────────┘
+
+VERİ ÖRNEĞİ:
+┌────────┬────────┬──────────┬─────────┬──────────┬─────────┬──────┬────────┐
+│ Season │ DayNum │ WTeamID  │ WScore  │ LTeamID  │ LScore  │ WLoc │ NumOT  │
+├────────┼────────┼──────────┼─────────┼──────────┼─────────┼──────┼────────┤
+│ 1998   │ 137    │ 3104     │ 94      │ 3422     │ 46      │ H    │ 0      │
+│ 1998   │ 137    │ 3112     │ 75      │ 3365     │ 63      │ H    │ 0      │
+└────────┴────────┴──────────┴─────────┴──────────┴─────────┴──────┴────────┘
+
+WLoc DEĞERLERİ:
+┌────────────────────────────────────────────────────────────────────────────┐
+│ Değer │ Anlamı                      │ Kadınlar turnuvasında sıklığı              │
+├────────┼─────────────────────────────┼──────────────────────────────────────────┤
+│ N     │ Neutral (Tarafsız saha)     │ Çok yaygın - turnuva maçları genelde N    │
+│ H     │ Home (Ev sahibi)            │ İlk turlarda bazen yüksek seed'li takım   │
+│ A     │ Away (Deplasman)            │ Nadir - sadece özel durumlar              │
+└────────┴─────────────────────────────┴──────────────────────────────────────────┘
+
+
+────────────────────────────────────────────────────────────────────────────
+23. DOSYA: WNCAATourneySeeds.csv
+────────────────────────────────────────────────────────────────────────────
+AÇIKLAMA:
+Kadınlar turnuvası seed (kura) bilgileri. MNCAATourneySeeds.csv'nin kadınlar
+versiyonudur.
+
+Bu dosya turnuvaya katılan her takımın seed numarasını gösterir. Seed sistemi
+kadınlarda da erkeklerle aynı mantıkta çalışır:
+• 4 bölge (W, X, Y, Z) × 16 takım = 64 takım toplam
+• Her bölgede 1-16 arası seed'ler var
+• 1 seed en güçlü, 16 seed en zayıf
+
+ÖNEMLİ KULLANIM:
+Tahmin modelleri için seed farkı çok önemlidir. 1 vs 16 maçlarında %99'a yakın
+1 seed kazanırken, 8 vs 9 maçları %50-%50'dir.
+
+DEĞİŞKENLER TABLOSU:
+┌────────┬────────────────────────────────────────────────────────────────┐
+│ Değişken│ Açıklama                                                        │
+├────────┼────────────────────────────────────────────────────────────────┤
+│ Season │ Sezon yılı (1998-2026)                                          │
+│ Seed   │ Kura kodu (Bölge + Numara - W01, X16 gibi)                     │
+│ TeamID │ Takım ID'si (3xxx serisi)                                       │
+└────────┴────────────────────────────────────────────────────────────────┘
+
+VERİ ÖRNEĞİ:
+┌────────┬───────┬────────┐
+│ Season │ Seed  │ TeamID │
+├────────┼───────┼────────┤
+│ 1998   │ W01   │ 3330   │
+│ 1998   │ W02   │ 3163   │
+│ 1998   │ W03   │ 3112   │
+│ 1998   │ W04   │ 3301   │
+│ 1998   │ W10   │ 3302   │
+│ 1998   │ W16   │ 3241   │
+└────────┴───────┴────────┘
+
+SEED KODU ANLAMI (Erkeklerle aynı):
+┌────────────────────────────────────────────────────────────────────────┐
+│ Format: [Bölge][Sıra]                                                   │
+│ Bölgeler:  W, X, Y, Z (yılara göre değişir)                            │
+│ Sıra:      01-16 arası (2 haneli, sıfır ile başlar)                    │
+│                                                                        │
+│ W01 → Batı bölgesi, 1. seribağı (en güçlü)                             │
+│ W10 → Batı bölgesi, 10. seribağı                                        │
+│ W16 → Batı bölgesi, 16. seribağı (en zayıf)                            │
+└────────────────────────────────────────────────────────────────────────┘
+
+EŞLEŞME MANTIĞI:
+┌────────────────────────────────────────────────────────────────────────┐
+│ 1 vs 16, 2 vs 15, 3 vs 14, 4 vs 13, 5 vs 12, 6 vs 11, 7 vs 10, 8 vs 9 │
+│ İlk turda bu eşleşmeler oynanır. Kazanan bir sonraki tura geçer.    │
+└────────────────────────────────────────────────────────────────────────┘
+
+
+────────────────────────────────────────────────────────────────────────────
+24. DOSYA: WNCAATourneySlots.csv
+────────────────────────────────────────────────────────────────────────────
+AÇIKLAMA:
+Kadınlar turnuvası eşleşme kuralları. MNCAATourneySlots.csv'nin kadınlar
+versiyonudur.
+
+Bu dosya turnuva ağacındaki "eşleşme kurallarını" tanımlar. Her slot'ta hangi
+seed'lerin karşılaşacağını belirler.
+
+Kullanım amacı:
+• Turnuva ağacını çizmek için
+• Hangi maçın hangi turda oynacağını belirlemek için
+• Simülasyon yaparken eşleşmeleri oluşturmak için
+
+Bu dosya + 23. dosya (Seeds) + 22. dosya (Results) birleştiğinde turnuvanın
+tüm历史ini yeniden oluşturabilirsiniz.
+
+DEĞİŞKENLER TABLOSU:
+┌───────────┬──────────────────────────────────────────────────────────────┐
+│ Değişken  │ Açıklama                                                     │
+├───────────┼──────────────────────────────────────────────────────────────┤
+│ Season    │ Sezon yılı                                                   │
+│ Slot      │ Eşleşme slotu (R1W1, R2W1 gibi)                              │
+│ StrongSeed│ Güçlü seed (düşük numara - W01, W02, ...)                     │
+│ WeakSeed  │ Zayıf seed (yüksek numara - W16, W15, ...)                    │
+└───────────┴──────────────────────────────────────────────────────────────┘
+
+VERİ ÖRNEĞİ:
+┌────────┬────────┬────────────┬───────────┬────────────────────────────────┐
+│ Season │ Slot   │ StrongSeed │ WeakSeed  │ Açıklama                       │
+├────────┼────────┼────────────┼───────────┼────────────────────────────────┤
+│ 1998   │ R1W1   │ W01        │ W16       │ 1. tur, W bölgesi, 1. eşleşme  │
+│ 1998   │ R1W2   │ W02        │ W15       │ 1. tur, W bölgesi, 2. eşleşme  │
+│ 1998   │ R2W1   │ W01/W16    │ W08/W09   │ 2. tur, W bölgesi, 1. eşleşme  │
+└────────┴────────┴────────────┴───────────┴────────────────────────────────┘
+
+SLOT KODLARI:
+┌──────────┬──────────────────────────────────────────────────────┐
+│ Slot     │ Açıklama                                              │
+├──────────┼──────────────────────────────────────────────────────┤
+│ R1W1     │ Round 1, West 1 - 1. tur, batı bölgesi 1. eşleşme     │
+│ R2W1     │ Round 2, West 1 - 2. tur, batı bölgesi 1. eşleşme     │
+│ R3W1     │ Round 3, West 1 - 3. tur (Sweet Sixteen)              │
+│ R4W1     │ Round 4, West 1 - 4. tur (Elite Eight)                │
+│ R5WX     │ Round 5, West/X - 5. tur (Final Four)                 │
+│ R6CH     │ Round 6, Championship - Final maç                     │
+└──────────┴──────────────────────────────────────────────────────┘
+
+
+────────────────────────────────────────────────────────────────────────────
+25. DOSYA: WNCAATourneyDetailedResults.csv
+────────────────────────────────────────────────────────────────────────────
+AÇIKLAMA:
+Kadınlar turnuvası DETAYLI istatistikleri. MNCAATourneyDetailedResults.csv'nin
+kadınlar versiyonudur.
+
+Bu dosya sadece turnuva maçları için detaylı istatistikler içerir - normal sezon
+değil! Normal sezon detaylı istatistikleri için 27. dosyaya (WRegularSeasonDetailedResults)
+bakın.
+
+ÖNEMLİ NOT:
+Bu dosya 2010'dan beri veri içeriyor (erkekler 2003'ten başlıyor). Kadınlarda detaylı
+istatistik tutma daha geç başlamıştır.
+
+DEĞİŞKENLER TABLOSU:
+┌───────────┬──────────────────────────────────────────────────────────────┐
+│ Değişken  │ Açıklama                                                     │
+├───────────┼──────────────────────────────────────────────────────────────┤
+│ Season    │ Sezon yılı (2010-2026)                                       │
+│ DayNum    │ Sezonun kaçıncı günü                                         │
+│ WTeamID   │ Kazanan takım ID'si (3xxx)                                  │
+│ WScore    │ Kazanan takım skoru                                          │
+│ LTeamID   │ Kaybeden takım ID'si (3xxx)                                 │
+│ LScore    │ Kaybeden takım skoru                                        │
+│ WLoc      │ Maç konumu                                                   │
+│ NumOT     │ Uzatma sayısı                                                │
+│ WFGM/LFGM │ Field Goals Made - İsabetli atış (2+3 sayılık)              │
+│ WFGA/LFGA │ Field Goals Attempted - Toplam şut denemesi                 │
+│ WFGM3/... │ 3-Pointers Made - İsabetli 3lük                              │
+│ WFGA3/... │ 3-Pointers Attempted - Denenen 3lük                         │
+│ WFTM/LFTM │ Free Throws Made - İsabetli serbest atış                    │
+│ WFTA/LFTA │ Free Throws Attempted - Denenen serbest atış                │
+│ WOR/LOR   │ Offensive Rebounds - Hücum ribaundu                          │
+│ WDR/LDR   │ Defensive Rebounds - Savunma ribaundu                        │
+│ WAst/LAst │ Assists - Asist sayısı                                       │
+│ WTO/LTO   │ Turnovers - Top kaybı                                        │
+│ WStl/LStl │ Steals - Top çalma                                           │
+│ WBlk/LBlk │ Blocks - Blok sayısı                                         │
+│ WPF/LPF   │ Personal Fouls - Faul sayısı                                 │
+└───────────┴──────────────────────────────────────────────────────────────┘
+
+VERİ ÖRNEĞİ (2010 sezonu):
+┌──────────┬───────┬─────────┬─────────┬────────┬────────┬──────┬──────┐
+│ 2010     │ 138   │ 3124    │ 69      │ 3201   │ 55     │ N    │ 0    │
+├──────────┴───────┴─────────┴─────────┴────────┴────────┴──────┴──────┤
+│ KAZANAN (3124):                                                      │
+│ WFGM:28 WFGA:57 WFGM3:1 WFGA3:5 WFTM:12 WFTA:19                       │
+│ WOR:13 WDR:24 WAst:22 WTO:12 WStl:6 WBlk:2 WPF:12                      │
+├────────────────────────────────────────────────────────────────────────┤
+│ KAYBEDEN (3201):                                                      │
+│ LFGM:21 LFGA:61 LFGM3:10 LFGA3:34 LFTM:3 LFTA:5                        │
+│ LOR:11 LDR:27 LAst:11 LTO:18 LStl:4 LBlk:1 LPF:18                       │
+└────────────────────────────────────────────────────────────────────────┘
+
+
+────────────────────────────────────────────────────────────────────────────
+26. DOSYA: WRegularSeasonCompactResults.csv
+────────────────────────────────────────────────────────────────────────────
+AÇIKLAMA:
+Kadınlar normal sezon maç sonuçları. MRegularSeasonCompactResults.csv'nin
+kadınlar versiyonudur.
+
+Turnuva dışındaki tüm maçları içerir - her sezonda binlerce maç! Bu dosya
+takımların turnuva öncesi performansını analiz etmek için kritik önem taşır.
+
+Kadınlarda da normal sezon başarısı turnuva başarısını yordamak için en iyi
+göstergedir.
+
+DEĞİŞKENLER TABLOSU:
+┌──────────┬─────────────────────────────────────────────────────────────┐
+│ Değişken │ Açıklama                                                    │
+├──────────┼─────────────────────────────────────────────────────────────┤
+│ Season   │ Sezon yılı                                                  │
+│ DayNum   │ Sezonun kaçıncı günü (0-132 arası)                          │
+│ WTeamID  │ Kazanan takım ID'si (3xxx)                                  │
+│ WScore   │ Kazanan takım skoru                                         │
+│ LTeamID  │ Kaybeden takım ID'si (3xxx)                                 │
+│ LScore   │ Kaybeden takım skoru                                        │
+│ WLoc     │ Maç konumu (N=Neutral, H=Home, A=Away)                      │
+│ NumOT    │ Uzatma sayısı                                               │
+└──────────┴─────────────────────────────────────────────────────────────┘
+
+VERİ ÖRNEĞİ:
+┌────────┬────────┬──────────┬─────────┬──────────┬─────────┬──────┬────────┐
+│ Season │ DayNum │ WTeamID  │ WScore  │ LTeamID  │ LScore  │ WLoc │ NumOT  │
+├────────┼────────┼──────────┼─────────┼──────────┼─────────┼──────┼────────┤
+│ 1998   │ 18     │ 3104     │ 91      │ 3202     │ 41      │ H    │ 0      │
+└────────┴────────┴──────────┴─────────┴──────────┴─────────┴──────┴────────┘
+
+WLoc (Maç Konumu) anlamı:
+┌────────────────────────────────────────────────────────────────────────────┐
+│ Değer │ Anlamı                      │ Açıklama                                  │
+├────────┼─────────────────────────────┼──────────────────────────────────────────┤
+│ H     │ Home (Ev sahibi)            │ Kazanan takım ev sahibi oldu              │
+│ A     │ Away (Deplasman)            │ Kazanan takım deplasmandı kazandı          │
+│ N     │ Neutral (Tarafsız saha)     │ Maç tarafsız sahada oynandı              │
+└────────┴─────────────────────────────┴──────────────────────────────────────────┘
+
+
+────────────────────────────────────────────────────────────────────────────
+27. DOSYA: WRegularSeasonDetailedResults.csv
+────────────────────────────────────────────────────────────────────────────
+AÇIKLAMA:
+Kadınlar normal sezon DETAYLI istatistikleri. MRegularSeasonDetailedResults.csv'nin
+kadınlar versiyonudur.
+
+Bu dosya en değerli W dosyalarından biridir! Kadınlarda da normal sezon
+performansı turnuva başarısını yordamak için kullanılır.
+
+Bu dosya 2010'dan beri veri içerir. Normal sezonda her yıl ~3,500-4,000 maç
+vardır ve her maç için 34 detaylı istatistik tutulur.
+
+DEĞİŞKENLER TABLOSU:
+┌───────────┬──────────────────────────────────────────────────────────────┐
+│ Değişken  │ Açıklama                                                     │
+├───────────┼──────────────────────────────────────────────────────────────┤
+│ Season    │ Sezon yılı (2010-2026)                                       │
+│ DayNum    │ Sezonun kaçıncı günü                                         │
+│ WTeamID   │ Kazanan takım ID'si (3xxx)                                  │
+│ WScore    │ Kazanan takım skoru                                          │
+│ LTeamID   │ Kaybeden takım ID'si (3xxx)                                 │
+│ LScore    │ Kaybeden takım skoru                                        │
+│ WLoc      │ Maç konumu                                                   │
+│ NumOT     │ Uzatma sayısı                                                │
+│ WFGM/LFGM │ Field Goals Made - İsabetli atış                            │
+│ WFGA/LFGA │ Field Goals Attempted - Toplam şut denemesi                 │
+│ WFGM3/... │ 3-Pointers Made - İsabetli 3lük                              │
+│ WFGA3/... │ 3-Pointers Attempted - Denenen 3lük                         │
+│ WFTM/LFTM │ Free Throws Made - İsabetli serbest atış                    │
+│ WFTA/LFTA │ Free Throws Attempted - Denenen serbest atış                │
+│ WOR/LOR   │ Offensive Rebounds - Hücum ribaundu                          │
+│ WDR/LDR   │ Defensive Rebounds - Savunma ribaundu                        │
+│ WAst/LAst │ Assists - Asist sayısı                                       │
+│ WTO/LTO   │ Turnovers - Top kaybı                                        │
+│ WStl/LStl │ Steals - Top çalma                                           │
+│ WBlk/LBlk │ Blocks - Blok sayısı                                         │
+│ WPF/LPF   │ Personal Fouls - Faul sayısı                                 │
+└───────────┴──────────────────────────────────────────────────────────────┘
+
+VERİ ÖRNEĞİ (2010 sezonu, 11. gün):
+┌──────────┬───────┬─────────┬─────────┬────────┬────────┬──────┬──────┐
+│ 2010     │ 11    │ 3103    │ 63      │ 3237   │ 49     │ H    │ 0    │
+├──────────┴───────┴─────────┴─────────┴────────┴────────┴──────┴──────┤
+│ KAZANAN (3103 - Akron):                                               │
+│ WFGM:23 WFGA:54 WFGM3:5 WFGA3:9 WFTM:12 WFTA:19                        │
+│ WOR:10 WDR:26 WAst:14 WTO:18 WStl:7 WBlk:0 WPF:15                       │
+├────────────────────────────────────────────────────────────────────────┤
+│ KAYBEDEN (3237):                                                     │
+│ LFGM:20 LFGA:54 LFGM3:3 LFGA3:13 LFTM:6 LFTA:10                         │
+│ LOR:11 LDR:27 LAst:11 LTO:23 LStl:7 LBlk:6 LPF:19                       │
+└────────────────────────────────────────────────────────────────────────┘
+
+BÖLÜMSEL ANALİZ:
+┌─────────────────┬──────────┬──────────┬────────────────────────┐
+│ Metrik          │ Kazanan  │ Kaybeden │ Açıklama                │
+├─────────────────┼──────────┼──────────┼────────────────────────┤
+│ Şut Yüzdesi     │ %42.6    │ %37.0    │ 23/54 vs 20/54          │
+│ 3lük Yüzdesi    │ %55.6    │ %23.1    │ 5/9 vs 3/13             │
+│ Serbest Atış    │ %63.2    │ %60.0    │ 12/19 vs 6/10           │
+│ Toplam Ribaund  │ 36       │ 38       │ (10+26) vs (11+27)      │
+│ Asist/TO Ratio │ 0.78     │ 0.48     │ 14/18 vs 11/23           │
+└─────────────────┴──────────┴──────────┴────────────────────────┘
+
+
+────────────────────────────────────────────────────────────────────────────
+28. DOSYA: WTeamConferences.csv
+────────────────────────────────────────────────────────────────────────────
+AÇIKLAMA:
+Kadın takımlarının konferans bilgileri. MTeamConferences.csv'nin kadınlar
+versiyonudur.
+
+Bu dosya her sezon hangi takımın hangi konferansta yer aldığını gösterir.
+Kadınlarda da konferans bilgisi turnuva elemeleri ve takım güç analizi için
+çok önemlidir.
+
+DEĞİŞKENLER TABLOSU:
+┌──────────┬─────────────────────────────────────────────────────────────┐
+│ Değişken │ Açıklama                                                    │
+├──────────┼─────────────────────────────────────────────────────────────┤
+│ Season   │ Sezon yılı                                                  │
+│ TeamID   │ Takım ID'si (3xxx)                                          │
+│ ConfAbbrev│ Konferans kısaltması                                        │
+└──────────┴─────────────────────────────────────────────────────────────┘
+
+VERİ ÖRNEĞİ:
+┌────────┬────────┬────────────┐
+│ Season │ TeamID │ ConfAbbrev │
+├────────┼────────┼────────────┤
+│ 1998   │ 3102   │ wac        │
+│ 1998   │ 3103   │ mac        │
+└────────┴────────┴────────────┘
+
+KADINLAR KONFERANSLARI:
+Kadınlar konferansları erkeklerle aynı isimlere sahip olabilir ama
+turnuva yapıları farklı olabilir. Bazı güçlü konferanslar:
+• acc (Atlantic Coast Conference)
+• sec (Southeastern Conference)
+• big_ten (Big Ten Conference)
+• big_twelve (Big 12 Conference)
+• pac_twelve (Pac-12 Conference)
+
+
+────────────────────────────────────────────────────────────────────────────
+29. DOSYA: WGameCities.csv
+────────────────────────────────────────────────────────────────────────────
+AÇIKLAMA:
+Kadın maçlarının oynandığı şehir bilgileri. MGameCities.csv'nin kadınlar
+versiyonudur.
+
+Bu dosya hem normal sezon hem turnuva maçlarının oynandığı şehri gösterir.
+
+DEĞİŞKENLER TABLOSU:
+┌──────────┬─────────────────────────────────────────────────────────────┐
+│ Değişken │ Açıklama                                                    │
+├──────────┼─────────────────────────────────────────────────────────────┤
+│ Season   │ Sezon yılı                                                  │
+│ DayNum   │ Sezonun kaçıncı günü                                        │
+│ WTeamID  │ Kazanan takım ID'si (3xxx)                                  │
+│ LTeamID  │ Kaybeden takım ID'si (3xxx)                                 │
+│ CRType   │ Maç tipi (Regular veya Tourney)                             │
+│ CityID   │ Oynanan şehrin ID'si                                        │
+└──────────┴─────────────────────────────────────────────────────────────┘
+
+VERİ ÖRNEĞİ:
+┌────────┬────────┬──────────┬──────────┬──────────┬─────────┬────────┐
+│ Season │ DayNum │ WTeamID  │ LTeamID  │ CRType   │ CityID │
+├────────┼────────┼──────────┼──────────┼──────────┼─────────┼────────┤
+│ 2010   │ 11     │ 3103     │ 3237     │ Regular  │ 4002   │
+│ 2010   │ 11     │ 3104     │ 3399     │ Regular  │ 4085   │
+└────────┴────────┴──────────┴──────────┴─────────┴────────┘
+
+
+────────────────────────────────────────────────────────────────────────────
+30. DOSYA: WConferenceTourneyGames.csv
+────────────────────────────────────────────────────────────────────────────
+AÇIKLAMA:
+Kadın konferans turnuvası maçları. MConferenceTourneyGames.csv'nin kadınlar
+versiyonudur.
+
+Bu dosya her konferansın kendi turnuvasındaki maçları içerir. Konferans
+turnuvasını kazanan takım NCAA turnuvasına otomatik katılım hakkı kazanır.
+
+DEĞİŞKENLER TABLOSU:
+┌───────────┬──────────────────────────────────────────────────────────────┐
+│ Değişken  │ Açıklama                                                     │
+├───────────┼──────────────────────────────────────────────────────────────┤
+│ Season    │ Sezon yılı                                                   │
+│ ConfAbbrev│ Konferans kısaltması                                         │
+│ DayNum    │ Sezonun kaçıncı günü                                         │
+│ WTeamID   │ Kazanan takım ID'si (3xxx)                                  │
+│ LTeamID   │ Kaybeden takım ID'si (3xxx)                                 │
+└───────────┴──────────────────────────────────────────────────────────────┘
+
+VERİ ÖRNEĞİ:
+┌────────┬────────────┬────────┬──────────┬──────────┐
+│ Season │ ConfAbbrev │ DayNum │ WTeamID  │ LTeamID  │
+├────────┼────────────┼────────┼──────────┼──────────┤
+│ 2002   │ ovc        │ 120    │ 3122     │ 3369     │
+│ 2002   │ ovc        │ 120    │ 3184     │ 3293     │
+└────────┴────────────┴────────┴──────────┴──────────┘
+
+KONFERANS TURNUVASI ANLAMı:
+Konferans turnuvası kazananı → "Automatic Bid" → NCAA turnuvasına katılım
+Kazanamayan güçlü takımlar → "At-Large Bid" → Seçici komite tarafından davet
+
+
+────────────────────────────────────────────────────────────────────────────
+31. DOSYA: WSecondaryTourneyCompactResults.csv
+────────────────────────────────────────────────────────────────────────────
+AÇIKLAMA:
+Kadın secondary turnuva sonuçları (WNIT vb.). MSecondaryTourneyCompactResults.csv'nin
+kadınlar versiyonudur.
+
+Kadınların en önemli secondary turnuvası:
+• WNIT (Women's National Invitation Tournament) - En prestijli
+• WBI (Women's Basketball Invitational)
+
+Neden bu dosya önemli?
+• Turnuvaya KATILAMAYAN kadın takımların performansını gösterir
+• "Bubble team" analizi için yararlı
+• Konferans güçlerini karşılaştırmak için ek veri
+
+DEĞİŞKENLER TABLOSU:
+┌───────────────────┬────────────────────────────────────────────────────────┐
+│ Değişken          │ Açıklama                                             │
+├───────────────────┼────────────────────────────────────────────────────────┤
+│ Season            │ Sezon yılı                                           │
+│ DayNum            │ Sezonun kaçıncı günü                                 │
+│ WTeamID           │ Kazanan takım ID'si (3xxx)                           │
+│ WScore            │ Kazanan takım skoru                                  │
+│ LTeamID           │ Kaybeden takım ID'si (3xxx)                          │
+│ LScore            │ Kaybeden takım skoru                                 │
+│ WLoc              │ Maç konumu (N/H/A)                                   │
+│ NumOT             │ Uzatma sayısı                                        │
+│ SecondaryTourney  │ Turnuva adı (WNIT, WBI vb.)                          │
+└───────────────────┴────────────────────────────────────────────────────────┘
+
+VERİ ÖRNEĞİ:
+┌────────┬────────┬──────────┬─────────┬──────────┬─────────┬──────┬────────┬────────┐
+│ Season │ DayNum │ WTeamID  │ WScore  │ LTeamID  │ LScore  │ WLoc │ NumOT  │ SecondaryTourney│
+├────────┼────────┼──────────┼─────────┼──────────┼─────────┼──────┼────────┼────────┤
+│ 2013   │ 135    │ 3120     │ 80      │ 3412     │ 57      │ H    │ 0      │ WNIT   │
+│ 2013   │ 135    │ 3140     │ 69      │ 3226     │ 54      │ H    │ 0      │ WNIT   │
+└────────┴────────┴──────────┴─────────┴──────────┴─────────┴──────┴────────┴────────┘
+
+
+────────────────────────────────────────────────────────────────────────────
+32. DOSYA: WSecondaryTourneyTeams.csv
+────────────────────────────────────────────────────────────────────────────
+AÇIKLAMA:
+Kadın secondary turnuva katılımları. MSecondaryTourneyTeams.csv'nin kadınlar
+versiyonudur.
+
+Bu dosya hangi takımın hangi secondary turnuvaya katıldığını gösterir.
+
+DEĞİŞKENLER TABLOSU:
+┌──────────────────┬─────────────────────────────────────────────────────────┐
+│ Değişken         │ Açıklama                                             │
+├──────────────────┼─────────────────────────────────────────────────────────┤
+│ Season           │ Sezon yılı                                           │
+│ SecondaryTourney │ Turnuva adı (WNIT, WBI vb.)                           │
+│ TeamID           │ Takım ID'si (3xxx)                                   │
+└──────────────────┴─────────────────────────────────────────────────────────┘
+
+
+────────────────────────────────────────────────────────────────────────────
+33. DOSYA: WTeamSpellings.csv
+────────────────────────────────────────────────────────────────────────────
+AÇIKLAMA:
+Kadın takımı isim varyasyonları. MTeamSpellings.csv'nin kadınlar versiyonudur.
+Farklı yazılışları aynı TeamID'ye (3xxx) eşleştirir.
+
+Kullanım senaryoları:
+• Web scraping'den gelen verileri standartlaştırmak
+• Kullanıcı girdilerini doğru TeamID'ye eşleştirmek
+• Yazım hatalarını toleranslamak
+
+DEĞİŞKENLER TABLOSU:
+┌───────────────────┬────────────────────────────────────────────────────────┐
+│ Değişken          │ Açıklama                                             │
+├───────────────────┼────────────────────────────────────────────────────────┤
+│ TeamNameSpelling  │ Takım isminin bir varyasyonu (küçük harf, tire vb.)   │
+│ TeamID            │ Bu ismin karşılığı gelen resmi TeamID (3xxx)            │
+└───────────────────┴────────────────────────────────────────────────────────┘
+
+VERİ ÖRNEĞİ (Kadınlar için):
+┌──────────────────────────┬────────┬────────────────────────────────────┐
+│ TeamNameSpelling         │ TeamID │ Açıklama                           │
+├──────────────────────────┼────────┼────────────────────────────────────┤
+│ abilene chr              │ 3101   │ Kısaltılmış                         │
+│ abilene christian        │ 3101   │ Tam ad                              │
+│ abilene-christian        │ 3101   │ Tire ile                            │
+│ alabama                  │ 3104   │ Basit                               │
+└──────────────────────────┴────────┴────────────────────────────────────┘
+
+
+================================================================================
+                    KADINLAR (W) DOSYALARI ÖZET
+================================================================================
+
+┌──────┬──────────────────────────────────────┬─────────────────────────┐
+│ #    │ Dosya Adı                            │ Karşılığı (M)          │
+├──────┼──────────────────────────────────────┼─────────────────────────┤
+│ 20   │ WTeams.csv                            │ MTeams.csv             │
+│ 21   │ WSeasons.csv                          │ MSeasons.csv           │
+│ 22   │ WNCAATourneyCompactResults.csv        │ MNCAA...Compact...     │
+│ 23   │ WNCAATourneySeeds.csv                 │ MNCAA...Seeds.csv      │
+│ 24   │ WNCAATourneySlots.csv                 │ MNCAA...Slots.csv      │
+│ 25   │ WNCAATourneyDetailedResults.csv       │ MNCAA...Detailed...    │
+│ 26   │ WRegularSeasonCompactResults.csv      │ MRegular...Compact...  │
+│ 27   │ WRegularSeasonDetailedResults.csv     │ MRegular...Detailed... │
+│ 28   │ WTeamConferences.csv                  │ MTeamConferences.csv   │
+│ 29   │ WGameCities.csv                       │ MGameCities.csv        │
+│ 30   │ WConferenceTourneyGames.csv           │ MConf...Games.csv      │
+│ 31   │ WSecondaryTourneyCompactResults.csv   │ MSecondary...Results   │
+│ 32   │ WSecondaryTourneyTeams.csv            │ MSecondary...Teams     │
+│ 33   │ WTeamSpellings.csv                    │ MTeamSpellings.csv     │
+└──────┴──────────────────────────────────────┴─────────────────────────┘
+
+ANA FARKLAR:
+┌────────────────────────────────────────────────────────────────────────────┐
+│ Özellik         │ Erkek (M)              │ Kadın (W)                      │
+├─────────────────┼────────────────────────┼────────────────────────────────┤
+│ Başlangıç       │ 1985                   │ 1998                          │
+│ TeamID Aralığı  │ 1xxx (1101-...)        │ 3xxx (3101-...)               │
+│ Takım Sayısı    │ 350+                   │ 350+                          │
+│ Bölgeler        │ 4 (W,X,Y,Z)            │ 4 (W,X,Y,Z)                   │
+│ Seed Sistemi    │ 1-16                   │ 1-16                          │
+│ 2020            │ İptal (COVID)          │ İptal (COVID)                 │
+└─────────────────┴────────────────────────┴────────────────────────────────┘
+
+ÖNEMLİ UYARI:
+Aynı isimli takımlar ERKEK ve KADIN için farklı TeamID'lere sahiptir:
+• Alabama Men → TeamID 1104
+• Alabama Women → TeamID 3104
+
+Tahmin modeli yaparken M ve W verilerini karıştırmayın!
+
+
+================================================================================
+                      TOPLAM ANALİZ EDİLEN DOSYA: 33
+              (19 Erkek + 14 Kadın)
+================================================================================
