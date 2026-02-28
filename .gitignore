@@ -38,8 +38,12 @@ ENV/
 *.swo
 
 # Project specific data and logs
-data/
-march-machine-leraning-mania-2026/
+data/*
+!data/.gitkeep
+
+march-machine-leraning-mania-2026/*
+!march-machine-leraning-mania-2026/.gitkeep
+
 *.csv
 *.log
 
