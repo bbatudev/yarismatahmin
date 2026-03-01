@@ -1947,5 +1947,83 @@ Her dosya şunları içerir:
 - Önem seviyesi (🔴 Kritik, 🟡 Orta, 🟢 Düşük)
 
 ================================================================================
+                    TÜM DEĞİŞKENLER NUMARALI LİSTE
+================================================================================
+
+CORE DEĞİŞKENLER (3):
+  1. Season            → Sezon yılı, time-series split için kritik
+  2. DayNum            → Gün numarası, rest days, momentum
+  3. TeamID            → Takım kimlik numarası, primary key
+
+MAÇ SONUÇLARI (4):
+  4. WTeamID           → Kazanan takım ID
+  5. LTeamID           → Kaybeden takım ID
+  6. WScore            → Kazanan takım skoru
+  7. LScore            → Kaybeden takım skoru
+
+MAÇ KOŞULLARI (2):
+  8. WLoc              → Maç yeri (H/A/N), Home Court Advantage
+  9. NumOT             → Uzatma sayısı
+
+TURNUVA (1):
+ 10. Seed              → Turnuva sıralaması (1-16), en güçlü feature
+
+MASSEY ORDINALS (3):
+ 11. Season            → Sezon yılı
+ 12. RankingDayNum     → Sıralama günü
+ 13. OrdinalRank       → Sıralama (196 sistem ortalaması)
+
+KONFERANS (2):
+ 14. ConfAbbrev        → Konferans kısaltması
+ 15. Description       → Konferans tam adı
+
+SHOOTING STATS (6):
+ 16. WFGM / LFGM       → Saha basketleri yapılan
+ 17. WFGA / LFGA       → Saha basketleri denenen
+ 18. WFGM3 / LFGM3     → 3 sayı isabetleri
+ 19. WFGA3 / LFGA3     → 3 sayı denenen
+ 20. WFTM / LFTM       → Serbest atış isabet
+ 21. WFTA / LFTA       → Serbest atış denenen
+
+REBOUNDING (4):
+ 22. WOR / LOR         → Hücum ribauntları
+ 23. WDR / LDR         → Savunma ribaundları
+
+BALL CONTROL (4):
+ 24. WAst / LAst       → Asistler
+ 25. WTO / LTO         → Top kayıpları
+
+DEFENSIVE STATS (4):
+ 26. WStl / LStl        → Top çalmalar
+ 27. WBlk / LBlk        → Bloklar
+
+FOULS (1):
+ 28. WPF / LPF          → Kişisel fauller
+
+TEAM INFO (2):
+ 29. TeamName          → Takım adı
+ 30. TeamNameSpelling  → Alternatif isimler
+
+TOURNAMENT STRUCTURE (3):
+ 31. DayZero           → Sezon başı referans tarihi
+ 32. RegionW/X/Y/Z     → Final Four bölge kazananları
+ 33. Slot              → Bracket eşleşme yeri
+
+LOCATIONS (2):
+ 34. CityID            → Şehir ID
+ 35. City / State      → Şehir bilgisi
+
+COACHES (1):
+ 36. FirstDayNum / LastDayNum → Koçun çalışma dönemi
+
+OTHER TOURNAMENTS (3):
+ 37. SecondaryTourneyTeams       → İkincil turnuva takımları
+ 38. SecondaryTourneyCompactResults → İkincil turnuva sonuçları
+ 39. ConferenceTourneyGames      → Konferans turnuva maçları
+
+SUBMISSION (1):
+ 40. ID / Pred          → Tahmin formatı (Season_TeamA_TeamB, 0-1)
+
+================================================================================
                     ÖZET - 40+ DEĞİŞKEN GRUBU ANALİZ EDİLDİ
 ================================================================================
