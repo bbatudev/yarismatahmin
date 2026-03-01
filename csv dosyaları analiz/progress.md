@@ -20,8 +20,7 @@
 | Tarih | Saat | Oturum | Versiyon | Değişiklik |
 |-------|------|--------|----------|------------|
 | 26-02-2026 | 16:45 | 1 | v0.1 | Proje başlangıcı, brainstorm raporu, CSV analizi, oturum sistemi |
-| | | | | |
-| | | | | |
+| 01-03-2026 | - | 2 | v0.2 | Tüm değişkenler tek tek analiz edildi (19 dosya, 40+ değişken grubu) |
 | | | | | |
 
 **Format:** GG-AA-YYYY | HH:MM | Oturum No | vX.X | Kısa açıklama
@@ -83,7 +82,7 @@ Erkek verileri ile aynı yapıda:
 | Terim | Açıklama |
 |-------|----------|
 | **Brier Score** | Olasılık tahminlerinin kalitesini ölçen metrik. 0=mükemmel, 1=en kötü. Formül: 1/N * Σ(forecast - outcome)² |
-| **Massey Ordinals** | Kenneth Massey tarafından geliştirilen, 100+ farklı sıralama sisteminin birleşimi. Düşük rank = daha iyi takım |
+| **Massey Ordinals** | Kenneth Massey tarafından geliştirilen, 196 farklı sıralama sisteminin birleşimi. **Düşük rank = daha iyi takım** (TERS!) |
 | **Seed** | Turnuvadaki takımların sıralaması (1-16 arası). W01 = West bölgesi 1. sıra |
 | **WLoc** | Maç yeri: H=Home (ev), A=Away (deplasman), N=Neutral (nötr) |
 | **DayNum** | Sezon içindeki gün numarası (0=Season başı, 132=Turnuva başı) |
@@ -119,14 +118,24 @@ Erkek verileri ile aynı yapıda:
 | **MCP sunucuları kurulumu** | ✅ Tamamlandı | GitHub MCP eklendi (restart gerekli) |
 | **Environment kurulumu** | ✅ Tamamlandı | Virtual environment mevcut |
 | **Oturum rapor sistemi** | ✅ Tamamlandı | session_start.md, session_end.md, günlük klasörler |
+| **Değişkenlerin tek tek analizi** | ✅ Tamamlandı | 19 dosya, 40+ değişken grubu detaylı analiz edildi |
+
+**Değişken Analizi Detayları:**
+- `değişkenlerin tek tek analizi/` klasöründe 19 analiz dosyası
+- Core: Season, DayNum, TeamID (3 dosya)
+- Game Results: Results, WLoc/NumOT (2 dosya)
+- Tournament: Seed, Massey Ordinals (2 dosya)
+- Conference: Konferans (1 dosya)
+- Stats: Shooting, Rebounding, Ball Control, Defensive, Fouls (5 dosya)
+- Metadata: Team Info, Tournament Structure, Locations, Coaches, Other Tournaments, Submission Format (6 dosya)
 
 ### ⏳ Yapılacaklar
 
 | Görev | Öncelik | Notlar |
 |-------|---------|--------|
-| **Veri yükleme ve keşif** | 🔴 Yüksek | Python ile verileri yükleyip istatistiksel inceleme |
+| **Veri yükleme script'i yaz** | 🔴 Yüksek | Tüm CSV'leri bir araya getiren Python kodu |
+| **Feature engineering** | 🔴 Yüksek | SeedDiff, MasseyRankDiff, WinPctDiff vb. feature'lar |
 | **Baseline model oluştur** | 🔴 Yüksek | Logistic Regression ile başlangıç modeli |
-| **Feature engineering** | 🔴 Yüksek | Massey Ordinals, win-loss, SOS vb. özellikler |
 | **EDA (Exploratory Data Analysis)** | 🟡 Orta | Veri dağılımları, korelasyonlar, outlier analizi |
 | **Model geliştirme (XGBoost/LightGBM)** | 🟡 Orta | Gelişmiş modelleri dene |
 | **Hyperparameter tuning** | 🟡 Orta | GridSearch / Optuna ile optimizasyon |
@@ -140,8 +149,8 @@ Erkek verileri ile aynı yapıda:
 
 | Görev | Sebep |
 |-------|-------|
-| Python kodları yazılması | Henüz başlanmadı |
-| Model eğitimi | Veri işleme aşamasında |
+| Python kodları yazılması (data loading) | Sıradaki görev |
+| Model eğitimi | Değişken analizi bitti, sırada feature engineering |
 | Kaggle submission | Model hazır değil |
 
 ---
@@ -178,6 +187,21 @@ Erkek verileri ile aynı yapıda:
 
 ## Özellik Mühendisliği Planı
 
+### 🔴 En Önemli Feature'lar (Analiz Sonucu)
+
+| Feature | Kaynak | Formül | Korelasyon |
+|---------|--------|--------|------------|
+| **SeedDiff** | Seed | Seed_A - Seed_B | +0.85 |
+| **MasseyRankDiff** | Massey | Rank_B - Rank_A (TERS!) | +0.78 |
+| **WinPctDiff** | Results | Win%_A - Win%_B | +0.70 |
+| **PointDiffDiff** | Results | AvgPtDiff_A - AvgPtDiff_B | +0.72 |
+
+**Four Factors (Dean Oliver):**
+- **eFG%Diff** (Shooting) - %40 ağırlık 🔴
+- **TO%Diff** (Turnovers) - %25 ağırlık 🔴
+- **ORB%Diff** (Rebounding) - %20 ağırlık 🟡
+- **FTRateDiff** (Fouling) - %15 ağırlık 🟢
+
 ### Temel Özellikler
 
 | Kategori | Özellikler |
@@ -191,9 +215,25 @@ Erkek verileri ile aynı yapıda:
 
 ### Data Leakage Önlemleri
 
+**KRİTİK KURAL:** `Season < Target_Season VE DayNum < Target_DayNum`
+
 - Sadece maç öncesindeki bilgileri kullan
 - Sezon kronolojik sırasını koru
 - Aynı fold içinde gelecekteki maçlardan feature üretme
+- ❌ Yanlış: Gelecek sezon veya gün sonuçlarını kullanma
+- ❌ Yanlış: Turnuva maçlarını regular season'da kullanma
+- ✅ Doğru: Geçmiş sezonlar + mevcut sezon (maçtan öncesi)
+
+### Train/Test Split Stratejisi
+
+```
+Train: 2016, 2017, 2018, 2019, 2021, 2022
+Val:   2023
+Test:  2024, 2025
+```
+
+**❌ ASLA rastgele split yapma!**
+**❌ Aynı sezonu train ve test'e koşma!**
 
 ---
 
@@ -283,12 +323,24 @@ yarismatahmin/
 ├── session_start.md              # Oturum başı şablonu
 ├── session_end.md                # Oturum sonu şablonu
 ├── brainstorm_report.md          # Beyin fırtınası raporu
+├── kaggle_akis_plani.md          # Kaggle yarışması akış planı
 ├── .env                          # Environment variables
 ├── .mcp.json                     # MCP sunucu ayarları
 ├── .claude/
 │   └── settings.local.json       # Claude ayarları
 ├── csv dosyaları analiz/
 │   └── progress.md               # Ana progress takibi
+├── değişkenlerin tek tek analizi/  # Değişken analizleri (YENİ!)
+│   ├── season/                   # Season analizi
+│   ├── daynum/                   # DayNum analizi
+│   ├── teamid/                   # TeamID analizi
+│   ├── results/                  # Results, WLoc, NumOT
+│   ├── seed/                     # Seed analizi
+│   ├── massey/                   # Massey Ordinals analizi
+│   ├── konferans/                # Konferans analizi
+│   ├── stats/                    # Shooting, Rebounding, etc.
+│   ├── metadata/                 # Team info, locations, coaches
+│   └── FINAL_OZET.md             # Tüm değişkenler özeti
 ├── 26-02-2026/                   # Günlük klasör (GG-AA-YYYY)
 │   └── gunluk_rapor.md           # Günlük rapor
 ├── src/                          # Kaynak kodlar
@@ -301,12 +353,13 @@ yarismatahmin/
 
 ## Sonraki Adımlar
 
-1. **Veri yükleme script'i yaz** - Tüm CSV'leri bir araya getir
-2. **Keşifsel veri analizi (EDA)** - Python ile verileri incele
-3. **Baseline model oluştur** - Logistic Regression ile başla
-4. **Feature engineering** - Brainstorm raporundaki fikirleri uygula
+1. **✅ DEĞİŞKEN ANALİZİ TAMAMLANDI** - Tüm 40+ değişken grubu detaylı analiz edildi
+2. **Veri yükleme script'i yaz** - Tüm CSV'leri bir araya getir
+3. **Feature engineering** - Analiz edilen değişkenlerden feature üretimi
+4. **Baseline model oluştur** - Logistic Regression ile başla (SeedDiff + MasseyRankDiff + WinPctDiff)
 5. **Model geliştirme** - XGBoost/LightGBM dene
+6. **Probability calibration** - Brier Score optimizasyonu
 
 ---
 
-*Son Güncelleme: 26-02-2026*
+*Son Güncelleme: 01-03-2026*

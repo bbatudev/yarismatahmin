@@ -1,4 +1,286 @@
 ================================================================================
+                  TÜM DEĞİŞKENLER KAPSAMLI REFERANS TABLOSU
+================================================================================
+
+Bu tablo, March Machine Learning Mania 2026 veri setindeki TÜM CSV dosyalarındaki
+TÜM değişkenleri ve anlamlarını içermektedir.
+
+────────────────────────────────────────────────────────────────────────────
+GENEL DEĞİŞKENLER (Tüm Dosyalarda Ortak)
+────────────────────────────────────────────────────────────────────────────
+┌──────────────┬────────────────────────────────────────────────────────────┐
+│ Değişken     │ Açıklama                                                    │
+├──────────────┼────────────────────────────────────────────────────────────┤
+│ Season       │ Sezon yılı (örn: 2025 = 2024-25 sezonu)                    │
+│ DayNum       │ Sezon içindeki gün numarası (0=Sezon başı, 132=Turnuva)    │
+│ TeamID       │ Takımın benzersiz kimlik numarası                         │
+│ WTeamID      │ Kazanan takımın ID'si                                     │
+│ LTeamID      │ Kaybeden takımın ID'si                                    │
+│ WScore       │ Kazanan takımın skoru                                     │
+│ LScore       │ Kaybeden takımın skoru                                    │
+│ WLoc         │ Maç yeri: H=Ev, A=Deplasman, N=Nötr                       │
+│ NumOT        │ Uzatma sayısı                                             │
+└──────────────┴────────────────────────────────────────────────────────────┘
+
+────────────────────────────────────────────────────────────────────────────
+MAÇ İSTATİSTİKLERİ (DetailedResults - W/L öneki Kazanan/Kaybeden)
+────────────────────────────────────────────────────────────────────────────
+┌──────────────┬────────────────────────────────────────────────────────────┐
+│ Değişken     │ Açıklama                                                    │
+├──────────────┼────────────────────────────────────────────────────────────┤
+│ WFGM / LFGM  │ Saha basketleri yapılan (Field Goals Made)                │
+│ WFGA / LFGA  │ Saha basketleri denenen (Field Goals Attempted)           │
+│ WFGM3/LFGM3  │ 3 sayı isabetleri yapılan                                  │
+│ WFGA3/LFGA3  │ 3 sayı denenen                                             │
+│ WFTM / LFTM  │ Serbest atış isabetleri (Free Throws Made)                │
+│ WFTA / LFTA  │ Serbest atış denenen                                       │
+│ WOR / LOR    │ Hücum ribaundları (Offensive Rebounds)                    │
+│ WDR / LDR    │ Savunma ribaundları (Defensive Rebounds)                  │
+│ WAst / LAst  │ Asistler                                                   │
+│ WTO / LTO    │ Top kayıpları (Turnovers)                                  │
+│ WStl / LStl  │ Top çalmalar (Steals)                                      │
+│ WBlk / LBlk  │ Bloklar                                                    │
+│ WPF / LPF    │ Kişisel fauller (Personal Fouls)                          │
+└──────────────┴────────────────────────────────────────────────────────────┘
+
+────────────────────────────────────────────────────────────────────────────
+TAKIM BİLGİLERİ (Teams.csv)
+────────────────────────────────────────────────────────────────────────────
+┌────────────────┬──────────────────────────────────────────────────────────┐
+│ Değişken       │ Açıklama                                                  │
+├────────────────┼──────────────────────────────────────────────────────────┤
+│ TeamID         │ Takımın benzersiz kimlik numarası                       │
+│ TeamName       │ Takım adı                                                │
+│ FirstD1Season  │ İlk Division 1 sezonu                                   │
+│ LastD1Season   │ Son Division 1 sezonu                                    │
+└────────────────┴──────────────────────────────────────────────────────────┘
+
+────────────────────────────────────────────────────────────────────────────
+SEZON BİLGİLERİ (Seasons.csv)
+────────────────────────────────────────────────────────────────────────────
+┌──────────────┬────────────────────────────────────────────────────────────┐
+│ Değişken     │ Açıklama                                                    │
+├──────────────┼────────────────────────────────────────────────────────────┤
+│ Season       │ Sezon yılı                                                │
+│ DayZero      │ Sezonun başlangıç tarihi (referans noktası)               │
+│ RegionW      │ West bölgesi super regional kazananı                      │
+│ RegionX      │ X bölgesi super regional kazananı                         │
+│ RegionY      │ Y bölgesi super regional kazananı                         │
+│ RegionZ      │ Z bölgesi super regional kazananı                         │
+└──────────────┴────────────────────────────────────────────────────────────┘
+
+────────────────────────────────────────────────────────────────────────────
+TURNUVA SEEDS (MNCAATourneySeeds.csv)
+────────────────────────────────────────────────────────────────────────────
+┌──────────────┬────────────────────────────────────────────────────────────┐
+│ Değişken     │ Açıklama                                                    │
+├──────────────┼────────────────────────────────────────────────────────────┤
+│ Season       │ Sezon yılı                                                │
+│ Seed         │ Turnuva sıralaması (örn: W01=West 1. sıra, W16=16. sıra)  │
+│ TeamID       │ Takım ID                                                  │
+└──────────────┴────────────────────────────────────────────────────────────┘
+
+Seed Formatı: Bölge Harfi (W/X/Y/Z) + 2 haneli sıra numarası
+- W01 = West bölgesi 1. sıra (en iyi)
+- W16 = West bölgesi 16. sıra
+- X01, Y01, Z01 = Diğer bölgelerin 1. sıraları
+
+────────────────────────────────────────────────────────────────────────────
+MASSEY ORDINALS (MMasseyOrdinals.csv)
+────────────────────────────────────────────────────────────────────────────
+┌────────────────┬──────────────────────────────────────────────────────────┐
+│ Değişken       │ Açıklama                                                  │
+├────────────────┼──────────────────────────────────────────────────────────┤
+│ Season         │ Sezon yılı                                               │
+│ RankingDayNum  │ Sıralamanın yapıldığı gün numarası                      │
+│ SystemName     │ Sıralama sistemi adı (196 farklı sistem var)            │
+│ TeamID         │ Takım ID                                                 │
+│ OrdinalRank    │ Sıralama numarası (DÜŞÜK = İYİ takım)                   │
+└────────────────┴──────────────────────────────────────────────────────────┘
+
+Not: 196 farklı sıralama sistemi var, her biri takımları farklı yöntemlerle
+sıralıyor. Düşük rank = daha iyi takım anlamına gelir.
+
+────────────────────────────────────────────────────────────────────────────
+KONFERANS (Conferences.csv, MTeamConferences.csv)
+────────────────────────────────────────────────────────────────────────────
+┌──────────────┬────────────────────────────────────────────────────────────┐
+│ Değişken     │ Açıklama                                                    │
+├──────────────┼────────────────────────────────────────────────────────────┤
+│ ConfAbbrev   │ Konferans kısaltması (örn: ACC, B10, SEC)                 │
+│ Description  │ Konferans tam adı                                         │
+│ Season       │ Sezon yılı                                                │
+│ TeamID       │ Takım ID                                                  │
+└──────────────┴────────────────────────────────────────────────────────────┘
+
+Önemli Konferanslar: ACC, Big Ten, Big 12, SEC, Pac-12, Big East
+
+────────────────────────────────────────────────────────────────────────────
+TURNUVA SLOTLARI (MNCAATourneySlots.csv)
+────────────────────────────────────────────────────────────────────────────
+┌──────────────┬────────────────────────────────────────────────────────────┐
+│ Değişken     │ Açıklama                                                    │
+├──────────────┼────────────────────────────────────────────────────────────┤
+│ Season       │ Sezon yılı                                                │
+│ Slot         │ Eşleşme yeri (örn: R1W1, R2WX1)                           │
+│ StrongSeed   │ Güçlü seed (kazanan beklenen)                             │
+│ WeakSeed     │ Zayıf seed (kaybeden beklenen)                            │
+└──────────────┴────────────────────────────────────────────────────────────┘
+
+Slot Formatı:
+- R1W1 = Round 1 West 1
+- R2WX1 = Round 2 West-X kazananı 1
+
+────────────────────────────────────────────────────────────────────────────
+ŞEHİR BİLGİLERİ (Cities.csv, MGameCities.csv)
+────────────────────────────────────────────────────────────────────────────
+┌──────────────┬────────────────────────────────────────────────────────────┐
+│ Değişken     │ Açıklama                                                    │
+├──────────────┼────────────────────────────────────────────────────────────┤
+│ CityID       │ Şehir ID                                                  │
+│ City         │ Şehir adı                                                 │
+│ State        │ Eyalet kısaltması (2 harfli)                              │
+│ CRType       │ Competition type (örn: NCAA, Conference)                  │
+└──────────────┴────────────────────────────────────────────────────────────┘
+
+────────────────────────────────────────────────────────────────────────────
+KOÇ BİLGİLERİ (MTeamCoaches.csv)
+────────────────────────────────────────────────────────────────────────────
+┌────────────────┬──────────────────────────────────────────────────────────┐
+│ Değişken       │ Açıklama                                                  │
+├────────────────┼──────────────────────────────────────────────────────────┤
+│ Season         │ Sezon yılı                                               │
+│ TeamID         │ Takım ID                                                 │
+│ FirstDayNum    │ Koçun başladığı gün numarası                            │
+│ LastDayNum     │ Koçun bittiği gün numarası                              │
+│ CoachName      │ Koç adı                                                  │
+└────────────────┴──────────────────────────────────────────────────────────┘
+
+────────────────────────────────────────────────────────────────────────────
+İKİNCİL TURNUVALAR (SecondaryTourney)
+────────────────────────────────────────────────────────────────────────────
+┌──────────────────┬────────────────────────────────────────────────────────┐
+│ Değişken         │ Açıklama                                                │
+├──────────────────┼────────────────────────────────────────────────────────┤
+│ Season           │ Sezon yılı                                             │
+│ SecondaryTourney │ İkincil turnuva adı (NIT, CBI vb.)                    │
+│ TeamID           │ Takım ID                                               │
+└──────────────────┴────────────────────────────────────────────────────────┘
+
+────────────────────────────────────────────────────────────────────────────
+SUBMISSION (SampleSubmission.csv)
+────────────────────────────────────────────────────────────────────────────
+┌──────────────┬────────────────────────────────────────────────────────────┐
+│ Değişken     │ Açıklama                                                    │
+├──────────────┼────────────────────────────────────────────────────────────┤
+│ ID           │ Benzersiz maç ID: Season_TeamA_TeamB                      │
+│ Pred         │ Tahmin edilen olasılık (0-1 arası)                        │
+└──────────────┴────────────────────────────────────────────────────────────┘
+
+Format: Tahmin etmek için TeamA'nın kazanma olasılığı
+
+────────────────────────────────────────────────────────────────────────────
+TAKIM İSİMLERİ ALTERNATİF (MTeamSpellings.csv)
+────────────────────────────────────────────────────────────────────────────
+┌──────────────────┬────────────────────────────────────────────────────────┐
+│ Değişken         │ Açıklama                                                │
+├──────────────────┼────────────────────────────────────────────────────────┤
+│ TeamNameSpelling │ Alternatif takım isimleri (yazım hataları vb.)        │
+│ TeamID           │ Doğru TeamID                                           │
+└──────────────────┴────────────────────────────────────────────────────────┘
+
+────────────────────────────────────────────────────────────────────────────
+KONFERANS TURNUVA MAÇLARI (MConferenceTourneyGames.csv)
+────────────────────────────────────────────────────────────────────────────
+┌──────────────┬────────────────────────────────────────────────────────────┐
+│ Değişken     │ Açıklama                                                    │
+├──────────────┼────────────────────────────────────────────────────────────┤
+│ Season       │ Sezon yılı                                                │
+│ ConfAbbrev   │ Konferans kısaltması                                      │
+│ DayNum       │ Gün numarası                                              │
+│ WTeamID      │ Kazanan takım ID                                          │
+│ LTeamID      │ Kaybeden takım ID                                         │
+└──────────────┴────────────────────────────────────────────────────────────┘
+
+────────────────────────────────────────────────────────────────────────────
+SEED ROUND SLOTS (MNCAATourneySeedRoundSlots.csv)
+────────────────────────────────────────────────────────────────────────────
+┌──────────────┬────────────────────────────────────────────────────────────┐
+│ Değişken     │ Açıklama                                                    │
+├──────────────┼────────────────────────────────────────────────────────────┤
+│ Seed         │ Seed kodu (örn: W01)                                      │
+│ GameRound    │ Tur numarası                                              │
+│ GameSlot     │ Maç slotu                                                 │
+│ EarlyDayNum  │ Erken oyun günü                                           │
+│ LateDayNum   │ Geç oyun günü                                            │
+└──────────────┴────────────────────────────────────────────────────────────┘
+
+================================================================================
+                            DOSYA ÖZET TABLOSU
+================================================================================
+
+┌─────────────────────────────────────┬────────────────────────────────────┐
+│ Dosya                               │ İçerik                             │
+├─────────────────────────────────────┼────────────────────────────────────┤
+│ Cities.csv                          │ Şehir bilgileri                    │
+│ Conferences.csv                     │ Konferans listesi                  │
+│ MTeams.csv / WTeams.csv             │ Erkek/Kadın takım bilgileri        │
+│ MSeasons.csv / WSeasons.csv         │ Erkek/Kadın sezon metadatası       │
+│ MRegularSeasonCompactResults.csv    │ Erkek normal sezon maç sonuçları   │
+│ MRegularSeasonDetailedResults.csv   │ Erkek normal sezon detaylı (34 sut)│
+│ MNCAATourneyCompactResults.csv      │ Erkek turnuva maç sonuçları        │
+│ MNCAATourneyDetailedResults.csv     │ Erkek turnuva detaylı (34 sütun)   │
+│ MNCAATourneySeeds.csv               │ Erkek turnuva seed'leri            │
+│ MNCAATourneySlots.csv               │ Erkek turnuva bracket yapısı       │
+│ MMasseyOrdinals.csv                 │ 196 sıralama sistemi (5.7M satır) │
+│ MTeamConferences.csv                │ Erkek takım-konferans eşleşme      │
+│ MGameCities.csv                     │ Erkek maç şehirleri                │
+│ MTeamCoaches.csv                    │ Erkek koç geçmişi                  │
+│ MTeamSpellings.csv                  │ Erkek alternatif isimler           │
+│ MConferenceTourneyGames.csv         │ Erkek konferans turnuva maçları    │
+│ MSecondaryTourney...csv             │ Erkek ikincil turnuvalar           │
+│ MNCAATourneySeedRoundSlots.csv      │ Erkek seed-round slot eşleşme      │
+│ (W ile başlayanlar)                 │ Kadınlar için aynı yapı            │
+│ SampleSubmissionStage1/2.csv        │ Submission formatı                 │
+└─────────────────────────────────────┴────────────────────────────────────┘
+
+Not: M öneki = Men (Erkek), W öneki = Women (Kadın)
+
+================================================================================
+                         ÖNEMLİ TERİMLER SÖZLÜĞÜ
+================================================================================
+
+┌─────────────────────────┬──────────────────────────────────────────────────┐
+│ Terim                   │ Açıklama                                          │
+├─────────────────────────┼──────────────────────────────────────────────────┤
+│ Seed                    │ Turnuva sıralaması (1-16, 1=en iyi)             │
+│ Bracket                 │ Turnuva ağacı                                     │
+│ Conference              │ Üniversite ligleri (ACC, Big Ten vb.)           │
+│ Field Goal              │ Saha basketi (2 sayılık atış)                    │
+│ 3-Pointer               │ 3 sayılık basket                                  │
+│ Free Throw              │ Serbest atış                                      │
+│ Rebound                 │ Ribaund                                           │
+│ Assist                  │ Asist                                              │
+│ Turnover                │ Top kaybı                                         │
+│ Steal                   │ Top çalma                                         │
+│ Block                   │ Blok                                               │
+│ Offensive Rebound       │ Hücum ribaundu                                    │
+│ Defensive Rebound       │ Savunma ribaundu                                  │
+│ Personal Foul           │ Kişisel faul                                      │
+│ Overtime (OT)           │ Uzatma süresi                                     │
+│ Home Court Advantage    │ Ev sahibi avantajı                                │
+│ Neutral Court           │ Nötr saha (ne ev ne deplasman)                   │
+│ Division 1 (D1)         │ 1. Bölüm (en üst seviye üniversite basketbolu)    │
+│ March Madness           │ NCAA turnuvasının popüler adı                     │
+│ Final Four              │ Yarı final (4 takım kaldığında)                   │
+│ Elite Eight             │ Çeyrek final (8 takım)                            │
+│ Sweet Sixteen           │ 2. tur (16 takım)                                 │
+└─────────────────────────┴──────────────────────────────────────────────────┘
+
+
+================================================================================
+
+================================================================================
                         CSV DOSYALARI ANALİZ RAPORU
 ================================================================================
 
@@ -1556,4 +1838,114 @@ Tahmin modeli yaparken M ve W verilerini karıştırmayın!
 ================================================================================
                       TOPLAM ANALİZ EDİLEN DOSYA: 33
               (19 Erkek + 14 Kadın)
+================================================================================
+
+
+
+================================================================================
+                    DEĞİŞKENLERİN TEK TEK ANALİZİ (YENİ!)
+================================================================================
+
+Her değişken için detaylı analiz dosyaları oluşturuldu:
+
+📁 Klasör: "değişkenlerin tek tek analizi/"
+
+┌────────────────────────────────────────────────────────────────────────────┐
+│ KATEGORİ          │ DOSYA SAYISI │ İÇERİK                                        │
+├───────────────────┼──────────────┼────────────────────────────────────────────────│
+│ Core              │ 3            │ Season, DayNum, TeamID                       │
+│ Game Results      │ 2            │ Results (WTeamID, LTeamID, Scores), WLoc, NumOT │
+│ Tournament        │ 2            │ Seed, Massey Ordinals (196 sistem)            │
+│ Conference        │ 1            │ Konferans, Power 6                            │
+│ Stats             │ 5            │ Shooting, Rebounding, Ball Control,         │
+│                   │              │ Defensive, Fouls (Four Factors)              │
+│ Metadata          │ 6            │ Team Info, Tournament Structure, Locations,  │
+│                   │              │ Coaches, Other Tournaments, Submission Format │
+└───────────────────┴──────────────┴────────────────────────────────────────────────│
+
+TOPLAM: 19 dosya, 40+ değişken grubu, ~5,000+ satır analiz
+
+================================================================================
+                    EN ÖNEMLİ FEATURE'LAR (Analiz Sonucu)
+================================================================================
+
+┌────────────────────┬──────────────┬──────────────────────────────────────────┐
+│ Feature            │ Kaynak       │ Korelasyon                                │
+├────────────────────┼──────────────┼──────────────────────────────────────────┤
+│ SeedDiff           │ Seed         │ +0.85 (En yüksek)                        │
+│ MasseyRankDiff     │ Massey       │ +0.78                                   │
+│ WinPctDiff         │ Results      │ +0.70                                   │
+│ PointDiffDiff      │ Results      │ +0.72                                   │
+│ eFG%Diff           │ Shooting     │ 🟡 Orta (Four Factors #1)                 │
+│ TO%Diff            │ Ball Control │ 🟡 Orta (Four Factors #2)                 │
+│ ORB%Diff           │ Rebounding   │ 🟡 Orta (Four Factors #3)                 │
+└────────────────────┴──────────────┴──────────────────────────────────────────┘
+
+================================================================================
+                    DATA LEHAGE KURALI (KRİTİK)
+================================================================================
+
+Feature üretirken SADECE şu maçları kullanabilirsin:
+    Season < Target_Season  VE  DayNum < Target_DayNum
+
+❌ Yanlış: Gelecek sezon veya gün sonuçlarını kullanma
+❌ Yanlış: Turnuva maçlarını regular season'da kullanma  
+✅ Doğru: Geçmiş sezonlar + mevcut sezon (maçtan öncesi)
+
+================================================================================
+                    TRAIN/TEST SPLIT STRATEJİSİ
+================================================================================
+
+Train: 2016, 2017, 2018, 2019, 2021, 2022
+Val:   2023
+Test:  2024, 2025
+
+❌ ASLA rastgele split yapma!
+❌ Aynı sezonu train ve test'e koşma!
+
+================================================================================
+                    DEĞİŞKENLERİN TEK TEK ANALİZİ DETAYLARI
+================================================================================
+
+Her değişken için ayrıntılı analiz dosyaları oluşturuldu:
+
+📁 Klasör: "değişkenlerin tek tek analizi/"
+
+┌────────────────────────────────────────────────────────────────────────────┐
+│ DOSYA                            │ İÇERİK SUMMARY                           │
+├───────────────────────────────────┼────────────────────────────────────────────────│
+│ season/01_season_analizi.md       │ Time-series split, sezon bazlı CV          │
+│ daynum/02_daynum_analizi.md       │ Rest days, momentum, data leakage          │
+│ teamid/03_teamid_analizi.md       │ Primary key, merge mantığı                │
+│ results/04_results_analizi.md     │ Win/Loss, Point diff (~12 avg)           │
+│ results/05_wloc_numot_analizi.md  │ Home court %66, Overtime %4             │
+│ seed/06_seed_analizi.md          │ SeedDiff = en güçlü feature (+0.85)      │
+│ massey/07_massey_analizi.md      │ 196 sistem, AvgOrdinalRank               │
+│ konferans/08_konferans_analizi.md │ Power 6, conference strength             │
+│ stats/09_shooting_stats.md       │ eFG%, Four Factors #1 (%40 ağırlık)     │
+│ stats/10_rebounding_stats.md     │ ORB%, DRB%, Four Factors #3             │
+│ stats/11_ball_control_stats.md   │ TO%, Four Factors #2 (%25 ağırlık)      │
+│ stats/12_defensive_stats.md      │ Steals, blocks                          │
+│ stats/13_fouls_stats.md          │ Foul rate, Four Factors #4              │
+│ metadata/14_team_info.md         │ Team names, spellings                    │
+│ metadata/15_tournament_structure.md│ Seasons, slots, brackets              │
+│ metadata/16_locations.md         │ Cities, home court advantage            │
+│ metadata/17_coaches.md           │ Coach experience                         │
+│ metadata/18_other_tournaments.md │ NIT, conference tournaments             │
+│ metadata/19_submission_format.md │ ID format, Brier Score, prediction       │
+│ FINAL_OZET.md                    │ Tüm değişkenler özeti                    │
+└───────────────────────────────────┴────────────────────────────────────────────────│
+
+TOPLAM: 19 dosya, 40+ değişken grubu, ~5,000+ satır detaylı analiz
+
+Her dosya şunları içerir:
+- Değişken tanımı
+- Veri yapısı
+- Feature fikirleri
+- Data leakage riskleri
+- Kullanım örnekleri
+- Önem seviyesi (🔴 Kritik, 🟡 Orta, 🟢 Düşük)
+
+================================================================================
+                    ÖZET - 40+ DEĞİŞKEN GRUBU ANALİZ EDİLDİ
 ================================================================================
