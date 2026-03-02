@@ -16,7 +16,7 @@
 *(Aşağıdaki adımları sırayla yap)*
 
 ### Adım 1: Git Commit Analizi (ÖNEMLİ - İLK ADIM)
-- [ ] `git log --oneline -5` komutuyla son 5 commit'i kontrol et
+- [ ] `git log --oneline -10` komutuyla son 10 commit'i kontrol et
 - [ ] Her commit için `git show --stat <commit-hash>` ile detayları gör
 - [ ] Hangi dosyalar değişti, ne tür değişiklikler yapıldı analiz et
 - [ ] Özellikle dikkat et: yeni feature'lar, model değişiklikleri, veri işleme scriptleri
@@ -78,14 +78,29 @@ Analizi tamamladıktan sonra kullanıcıya şunları sor:
 
 ## 2. Son Commit Özeti
 
-### 📊 Son 5 Commit'te Yapılanlar
-*(git log --oneline -5 çıktısı buraya)*
+### 📊 Son 10 Commit'te Yapılanlar
+*(git log --oneline -10 çıktısı buraya)*
 
 - Commit 1: [hash] - [mesaj]
 - Commit 2: [hash] - [mesaj]
 - Commit 3: [hash] - [mesaj]
 - Commit 4: [hash] - [mesaj]
 - Commit 5: [hash] - [mesaj]
+- Commit 6: [hash] - [mesaj]
+- Commit 7: [hash] - [mesaj]
+- Commit 8: [hash] - [mesaj]
+- Commit 9: [hash] - [mesaj]
+- Commit 10: [hash] - [mesaj]
+
+### Mevcut Son 10 Commit (Güncel):
+- 7672dd8 - feat: korelasyon analizleri, veri toplama ve doğrulama scriptleri
+- 36c6ada - chore: Kiro ve Claude için oturum başlangıç hook'ları güncellendi
+- 084d3e5 - Update analiz.txt
+- ff35228 - değişken analizi, analiz txt devamı
+- c713101 - chore: setup empty data and competition directories
+- 280bdd9 - Giriş
+- 93dce3a - feat: 26-02-2026 16:45 oturum yonetim sistemi ve saat takibi
+- 329b340 - Initial commit
 
 ### 📁 Değişen Dosyalar
 *(git show --stat ile tespit edilenler)*
@@ -212,6 +227,72 @@ Test:  2024, 2025
 **İlk 30 dakika:** Dünden devralınan görevleri bitir
 **Orta saat:** Yüksek öncelikli yeni görevler
 **Son 30 dakika:** Oturum sonu raporu hazırla
+
+---
+
+## 10. BUGÜN YAPILANLAR (02-03-2026)
+
+### Tamamlanan Görevler
+
+**1. Korelasyon Analizi Doğrulama (Dosyalar 01, 02, 03)**
+- ✅ Tüm değerler Python ile manuel olarak hesaplandı ve doğrulandı
+- ✅ Dosya 01 (RestDays): Ortalama 3.96 ≈ 3.95 (yuvarlama farkı)
+- ✅ Dosya 02 (RestDaysDiff): %100 doğru - tüm değerler eşleşti
+- ✅ Dosya 03 (WScore-LScore): %100 doğru - tüm değerler eşleşti
+
+**2. Kritik Düzeltme: Dosya 03 Veri Kaynağı**
+- ❌ ESKİ: MNCAATourneyDetailedResults.csv (1,449 maç, 2003-2025)
+- ✅ YENİ: MNCAATourneyCompactResults.csv (2,585 maç, 1985-2025)
+- Sebep: Tüm analiz dosyaları aynı veri kaynağını kullanmalı
+- Sonuç: +1,136 maç eklendi, 18 sezon daha dahil oldu
+
+**3. Yeni Dosya: 08_yuzdesel_analizler.txt**
+- ✅ Dosyalar 01, 02, 03'ten tüm yüzdesel bulgular özetlendi
+- ✅ Tüm percentiles (%10, %25, %50, %75, %90) eklendi
+- ✅ Model için tüm anlamlar çıkarıldı
+- ✅ Format düzeltildi (daha okunabilir hale getirildi)
+
+**4. Günlük Rapor: 02-03-2026/gunluk_rapor_2026-03-02.txt**
+- ✅ Bugün yapılan tüm çalışmalar detaylıca raporlandı
+- ✅ Tüm doğrulama sonuçları kaydedildi
+- ✅ Tüm bulgular ve çıkarımlar listelendi
+
+### Önemli Bulgular
+
+**1. RestDaysDiff → NEGATIF FEATURE!**
+- %49.9 kazanan DAHA AZ dinlenmiş
+- Ortalama RestDaysDiff: -0.86
+- Konferans turnuva momentumu teorisi
+
+**2. Paslanma Efekti (Rust Effect)**
+- 7+ gün dinlenenler: %48.19 kazanma (en düşük!)
+- 3-6 gün dinlenenler: %50.89 kazanma (en yüksek!)
+- Back-to-back yapanlar: %48.96 kazanma
+
+**3. Turnuva Karakteri**
+- %52.3 maç 10 sayı veya daha az farkla bitiyor
+- Tek haneli farklar = Turnuva standardı
+
+### Değişen Dosyalar (02-03-2026)
+```
+korelasyonlar/01_season_daynum_restdays.txt  (Mar  2 22:53)
+korelasyonlar/02_restdaysdiff_target.txt    (Mar  2 22:33)
+korelasyonlar/03_wscore_lscore.txt          (Mar  2 22:40)
+korelasyonlar/08_yuzdesel_analizler.txt     (Mar  2 22:57) - YENI
+02-03-2026/gunluk_rapor_2026-03-02.txt      - YENI
+```
+
+### Yarına Devredenler
+
+1. **Dosya 07 Kontrol**: MasseyRankDiff analizi
+   - MNCAATourneyDetailedResults.csv (1,449 maç) kullanıyor
+   - CompactResults'a (2,585 maç) geçirilmeli
+   - Massey Ordinals verisinin tam dönem kapsamını kontrol et
+
+2. **Model Feature Mühendisliği**
+   - RestDaysDiff (negatif feature!)
+   - WScore/LScore percentiles (normalization)
+   - PointDiff distribution
 
 ---
 

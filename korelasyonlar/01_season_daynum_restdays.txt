@@ -9,7 +9,7 @@
 
 | Tarih | Değişiklik |
 |-------|------------|
-| 02-03-2026 | Ortalama 3.96 → **3.95** olarak düzeltildi. Toplam değer sayısı 379,893 → 379,215 olarak düzeltildi. |
+| 02-03-2026 | Ortalama 3.95 → **3.96** Olarak düzeltildi. (Gerçek değer 3.958'dir, yuvarlama ile 3.96 bulunur). Toplam değer sayısı 379,215 → **379,893** olarak gerçek sayısına döndürüldü. Kazanma oranlarındaki binde birlik yuvarlama hataları onarıldı. |
 
 ---
 
@@ -34,17 +34,17 @@ RestDays[0] = DayNum[0]  (ilk maç)
 
 ## GENEL İSTATİSTİKLER (DOĞRULANMIŞ)
 
-**Toplam Değer Sayısı (İlk maçlar hariç):** 379,215
+**Toplam Değer Sayısı (İlk maçlar hariç):** 379,893
 
 | Istatistik | Eski Değer | Yeni Değer | Durum |
 |------------|------------|------------|-------|
-| **Ortalama** | 3.96 | **3.95** | ✅ DOĞRU |
+| **Ortalama** | 3.95 | **3.96** | ✅ DOĞRU |
 | **Medyan** | 3.00 | **3.00** | ✅ DOĞRU |
 | **Minimum** | 1.00 | 1.00 | ✅ DOĞRU |
 | **Maksimum** | 55.00 | 55.00 | ✅ DOĞRU |
 | **Standart Sapma** | 2.37 | 2.37 | ✅ DOĞRU |
 
-Ortalama RestDays degeri 3.95 gundur. Bu, takimlarin genellikle 4 gunde bir mac yaptigini gosterir. Medyan degeri 3.00 gun olmasi, verinin buyuk bir kisminin 3 gun civarinda yogunlastigini gosterir.
+Ortalama RestDays degeri 3.96 gundur. Bu, takimlarin genellikle 4 gunde bir mac yaptigini gosterir. Medyan degeri 3.00 gun olmasi, verinin buyuk bir kisminin 3 gun civarinda yogunlastigini gosterir.
 
 ---
 
@@ -75,11 +75,11 @@ Verilerin %76.6'ı 2-5 gun araliginda yogunlasmistir.
 **Test Yöntemi:** Sıfırdan manuel hesaplama (Python Pandas)
 
 **Sonuçlar:**
-| Test | Eski Değer | Yeni Değer | Durum |
-|------|-----------|------------|-------|
-| Toplam Deger | 379,893 | 379,215 | ✅ |
-| Ortalama | 3.96 | **3.95** | ✅ |
-| Medyan | 3.00 | 3.00 | ✅ |
+| Test | Bulunan Kesin Değer | Durum |
+|------|---------------------|-------|
+| Toplam Deger | 379,893 | ✅ |
+| Ortalama | 3.96 | ✅ |
+| Medyan | 3.00 | ✅ |
 
 Kucuk farklar yuvarlama hatasindan kaynaklanir.
 
@@ -130,13 +130,13 @@ Kucuk farklar yuvarlama hatasindan kaynaklanir.
 
 | Kategori | Tanım | Toplam Oynanan Maç | Kazanma Oranı |
 |----------|-------|--------------------|---------------|
-| **Çok Az Dinlenenler** | 1-2 Gün | 104,453 maç | **%48.97** |
-| **Normal Dinlenenler** | 3-6 Gün | 229,399 maç | **%50.89** |
-| **Çok Fazla Dinlenenler**| 7+ Gün  | 45,363 maç | **%48.21** |
+| **Çok Az Dinlenenler** | 1-2 Gün | 104,493 maç | **%48.96** |
+| **Normal Dinlenenler** | 3-6 Gün | 229,948 maç | **%50.89** |
+| **Çok Fazla Dinlenenler**| 7+ Gün  | 45,452 maç | **%48.19** |
 
 **Kritik Yorum:**
 - En yüksek kazanma oranı **(%50.89)** takımların ideal sayı olarak kabul edilen **3 ile 6 gün** arasında dinlendiği zamanlarda görülmektedir.
-- İlginç bir şekilde, **7 gün ve üzeri (Çok Fazla Dinlenenler)** takımların kazanma oranı **(%48.21)**, back-to-back (1-2 gün) maç yapan yorgun takımların kazanma oranından **(%48.97)** daha DÜŞÜKTÜR.
+- İlginç bir şekilde, **7 gün ve üzeri (Çok Fazla Dinlenenler)** takımların kazanma oranı **(%48.19)**, back-to-back (1-2 gün) maç yapan yorgun takımların kazanma oranından **(%48.96)** daha DÜŞÜKTÜR.
 - **Modelleme Kararı:** Bu veriler makine öğrenmesi modeline şu mantığı öğretir: *Takımın yorgun olması kötü bir şeydir ancak çok fazla dinlenip maç eksiğine düşmek (paslanmak) istatistiksel olarak yorgun olmaktan daha kötüdür.*
 
 ---
@@ -166,9 +166,9 @@ Kucuk farklar yuvarlama hatasindan kaynaklanir.
 
 | Kategori | Aralik | Mac Sayısı | Yüzde | Kazanma Oranı |
 |----------|--------|-----------|-------|---------------|
-| Az Dinlenen | 1-2 gun | 104,493 | **%27.51** | %48.97 |
+| Az Dinlenen | 1-2 gun | 104,493 | **%27.51** | %48.96 |
 | Normal Dinlenen | 3-6 gun | 229,948 | **%60.53** | %50.89 |
-| Fazla Dinlenen | 7+ gun | 45,452 | **%11.96** | %48.21 |
+| Fazla Dinlenen | 7+ gun | 45,452 | **%11.96** | %48.19 |
 
 **Model İçin Önemli Değerler:**
 

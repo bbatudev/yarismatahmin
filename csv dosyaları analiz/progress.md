@@ -21,6 +21,8 @@
 |-------|------|--------|----------|------------|
 | 26-02-2026 | 16:45 | 1 | v0.1 | Proje başlangıcı, brainstorm raporu, CSV analizi, oturum sistemi |
 | 01-03-2026 | - | 2 | v0.2 | Tüm değişkenler tek tek analiz edildi (19 dosya, 40+ değişken grubu) |
+| 01-03-2026 | - | 2 | v0.3 | Feature engineering script'i yazıldı (02_feature_engineering.py) |
+| 02-03-2026 | - | 3 | v0.4 | Değişken korelasyon metodolojisi ve 3'lü AI denetim sistemi kuruldu |
 | | | | | |
 
 **Format:** GG-AA-YYYY | HH:MM | Oturum No | vX.X | Kısa açıklama
@@ -106,6 +108,18 @@ Erkek verileri ile aynı yapıda:
 
 ---
 
+## Proje Anayasası ve Altın Kurallar
+
+Bu kurallar analiz ve modelleme sürecinde **KESİNLİKLE** uyulması gereken temel prensiplerdir:
+
+1. **Test Verisi Sadakati:** Modelin nihai hedefi turnuva maçlarını tahmin etmektir. Bu yüzden, değişkenlerin modeldeki gücünü (korelasyonunu) ölçerken **ASLA** 196.000 maçlık Regular Season verisi kullanılmaz. Upsetlerin ve denk güçlerin olduğu **2.585 maçlık Turnuva verisi (1985-2025)** kullanılır.
+2. **Kusursuz Matematik (Yaklaşıklık Yasağı):** Hiçbir oran, korelasyon veya sayı tahmin usulü, yuvarlama veya göz kararı ile yazılamaz. "Yaklaşık %20" gibi ifadeler yasaktır. Her şey Python üzerinden sıfırdan hesaplanıp, virgülüne kadar doğrulanmak zorundadır.
+3. **Üçlü AI Denetimi:** Her bir değişken analiz dosyası, yazıldıktan sonra **3 farklı AI (Veri Bilimcisi, Veritabanı Uzmanı, Basketbol Analisti)** tarafından ayrı ayrı Python betikleriyle test edilip matematiksel olarak teyit edilir. Sadece üçünün de onayladığı veriler "DOĞRULANMIŞ" kabul edilir.
+4. **Zorunlu Özetleme:** Her değişkenin kendi `.txt` analizi bittikten sonra, ondan elde edilen kritik yüzdeler ve model çıkarma kararları (Feature kararları) derhal `08_yuzdesel_analizler.txt` adlı özet dosyasına kopyalanır. Bu dosya modelin beyni olacaktır.
+5. **Data Leakage (Sızıntı) Önlemi:** Geçmişi gelecekle test etmek yasaktır. Train/Test split yapılırken kesinlikle zaman ekseni (Time-Series Split) korunacaktır.
+
+---
+
 ## Yapılacaklar ve Yapılmayanlar
 
 ### ✅ Yapılanlar
@@ -119,6 +133,7 @@ Erkek verileri ile aynı yapıda:
 | **Environment kurulumu** | ✅ Tamamlandı | Virtual environment mevcut |
 | **Oturum rapor sistemi** | ✅ Tamamlandı | session_start.md, session_end.md, günlük klasörler |
 | **Değişkenlerin tek tek analizi** | ✅ Tamamlandı | 19 dosya, 40+ değişken grubu detaylı analiz edildi |
+| **Feature engineering script'i** | ✅ Tamamlandı | 02_feature_engineering.py ile SeedDiff, MasseyRankDiff, WinPctDiff, PointDiffDiff feature'ları üretildi |
 
 **Değişken Analizi Detayları:**
 - `değişkenlerin tek tek analizi/` klasöründe 19 analiz dosyası
@@ -133,25 +148,24 @@ Erkek verileri ile aynı yapıda:
 
 | Görev | Öncelik | Notlar |
 |-------|---------|--------|
-| **Veri yükleme script'i yaz** | 🔴 Yüksek | Tüm CSV'leri bir araya getiren Python kodu |
-| **Feature engineering** | 🔴 Yüksek | SeedDiff, MasseyRankDiff, WinPctDiff vb. feature'lar |
-| **Baseline model oluştur** | 🔴 Yüksek | Logistic Regression ile başlangıç modeli |
-| **EDA (Exploratory Data Analysis)** | 🟡 Orta | Veri dağılımları, korelasyonlar, outlier analizi |
+| **Korelasyon analizi (Tüm Değişkenler Tablosu)** | 🔴 Yüksek | `tüm degiskenler tablo` adlı dosyada listelenen 60-70 adet değişkenin, yeni 3'lü AI doğrulama ve turnuva verisi kurallarına göre tek tek hesaplanması. |
+| **Kalan Değişkenlerin Onayı** | 🔴 Yüksek | 04, 05, 06 ve 07 numaralı dosyalar şu an sadece prototip olarak kuruldu. 1, 2 ve 3 numaralı dosyalarda yapılan "Kesin Matematiksel Doğrulama" işlemi henüz bunlara uygulanmadı. Sırayla teyit edilecekler. |
+| **Yüzdesel Analizlerin Güncellenmesi** | 🔴 Yüksek | Her biten değişken dosyasının özetinin `08_yuzdesel_analizler.txt` dosyasına eklenmesi işlemine devam edilecek. |
+| **Baseline model oluştur** | 🟡 Orta | Logistic Regression ile başlangıç modeli |
+| **Model eğitimi ve değerlendirme** | 🟡 Orta | Brier Score ile performans ölçümü |
 | **Model geliştirme (XGBoost/LightGBM)** | 🟡 Orta | Gelişmiş modelleri dene |
 | **Hyperparameter tuning** | 🟡 Orta | GridSearch / Optuna ile optimizasyon |
 | **Cross-validation stratejisi** | 🟡 Orta | Time-series split ile sezon bazlı CV |
 | **Probability calibration** | 🟡 Orta | Brier Score için olasılık kalibrasyonu |
-| **Ensemble modeller** | 🟢 Düşük | Birden fazla modeli birleştir |
-| **Error analysis** | 🟢 Düşük | Hatalı tahminleri analiz et |
 | **Final submission** | 🟢 Düşük | Kaggle'a dosya yükle |
 
 ### ❌ Yapılmayanlar
 
 | Görev | Sebep |
 |-------|-------|
-| Python kodları yazılması (data loading) | Sıradaki görev |
-| Model eğitimi | Değişken analizi bitti, sırada feature engineering |
-| Kaggle submission | Model hazır değil |
+| 04, 05, 06 ve 07 Dosyaları Teyidi | Henüz prototip halindeler, sıradaki adım olarak 3'lü AI denetiminden geçecekler. |
+| Tüm Değişkenlerin Analizi | Şu an sadece ilk 3 dosya bitti. Tablodaki 60-70 değişken için bu süreç devam edecek. |
+| Model Eğitimi | Değişken testleri ve Feature Engineering süreci kusursuzlaşmadan model kurmak hatalı olur. |
 
 ---
 
@@ -257,7 +271,23 @@ pip install pandas numpy scikit-learn xgboost lightgbm
 # Durum kontrol
 git status
 
-# Değişiklikleri ekle
+# Son 10 COMMIT'I GOR (ONEMLI!)
+git log --oneline -10
+
+# Commit detaylari (her bir commit icin)
+git show --stat <commit-hash>
+
+# MEVCUT SON 10 COMMIT (Guncel):
+# 7672dd8 - feat: korelasyon analizleri, veri toplama ve dogrulama scriptleri
+# 36c6ada - chore: Kiro ve Claude icin oturum baslangic hook'lari guncellendi
+# 084d3e5 - Update analiz.txt
+# ff35228 - degisken analizi, analiz txt devam
+# c713101 - chore: setup empty data and competition directories
+# 280bdd9 - Giris
+# 93dce3a - feat: 26-02-2026 16:45 oturum yonetim sistemi ve saat takibi
+# 329b340 - Initial commit
+
+# Degisiklikleri ekle
 git add .
 
 # Commit (standart format)
@@ -353,13 +383,12 @@ yarismatahmin/
 
 ## Sonraki Adımlar
 
-1. **✅ DEĞİŞKEN ANALİZİ TAMAMLANDI** - Tüm 40+ değişken grubu detaylı analiz edildi
-2. **Veri yükleme script'i yaz** - Tüm CSV'leri bir araya getir
-3. **Feature engineering** - Analiz edilen değişkenlerden feature üretimi
-4. **Baseline model oluştur** - Logistic Regression ile başla (SeedDiff + MasseyRankDiff + WinPctDiff)
-5. **Model geliştirme** - XGBoost/LightGBM dene
-6. **Probability calibration** - Brier Score optimizasyonu
+1. **✅ DEĞİŞKEN ANALİZİ PROTOTİPLERİ** - Tüm 40+ değişken grubu yüzeysel olarak analiz edildi.
+2. **✅ KUSURSUZ DOĞRULAMA (Faz 1)** - İlk 3 Değişken dosyası (RestDays, RestDaysDiff, WScore/LScore) 3'lü AI sistemi ile Turnuva verisi üzerinden kusursuzlaştırıldı ve özet dosyasına aktarıldı.
+3. **Kalan Dosyaların Teyidi** - Prototip halindeki 04, 05, 06 ve 07 numaralı dosyaların testten geçirilmesi.
+4. **Yeni Feature Taraması** - `tüm degiskenler tablo` dosyasındaki 60-70 değişkenin sırayla bu sisteme sokulması.
+5. **Model ve Optimizasyon** - Tüm özellikler (feature) elendikten ve onaylandıktan sonra XGBoost vb. ile Brier skor hedefine yöneliş.
 
 ---
 
-*Son Güncelleme: 01-03-2026*
+*Son Güncelleme: 02-03-2026*
