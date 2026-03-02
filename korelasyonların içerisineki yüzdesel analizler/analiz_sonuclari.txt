@@ -11,6 +11,7 @@ Bu dosya **sıfırdan manuel hesaplama** ile güncellenmiştir. Önceki değerle
 
 | Tarih | Değişiklik |
 |-------|------------|
+| 02-03-2026 | **WScore-LScore KRİTİK DÜZELTME:** Önceki dosyada farklı dönemlerden (1985-1999 WScore/LScore, 2003-2025 PointDiff) karışık değerler vardı. Tüm değerler 1985-2025 tam dönemi için yeniden hesaplandı. Turnuva korelasyonu: 0.696, WScore: 76.95, LScore: 65.13, PointDiff: 11.82, TotalScore: 142.08 |
 | 02-03-2026 | Tüm analizler sıfırdan yeniden hesaplandı. WScore korelasyonu, ev sahibi skor avantajı, SeedDiff, MasseyRankDiff değerleri düzeltildi. |
 
 ---
@@ -26,6 +27,7 @@ Bu dosya sadece özet içerir. Detaylı analizler için:
 5. **05_numot_analizi.txt** - Uzatma analizi
 6. **06_seeddiff_analizi.txt** - Seed farkı ve kazanma
 7. **07_masseyrankdiff_analizi.txt** - Massey rank analizi
+8. **08_yuzdesel_analizler.txt** - Öne çıkan yüzdesel bulgular (YENİ!)
 
 ---
 
@@ -69,11 +71,20 @@ Bu dosya sadece özet içerir. Detaylı analizler için:
 
 | Metrik | Eski Değer | Yeni Değer | Değişiklik |
 |--------|------------|------------|------------|
-| Pearson Korelasyonu | 0.70 | **0.642** | -0.058 |
-| Reg. PointDiff Ort. | 11.8 | **12.02** | +0.22 |
-| Turnuva PointDiff Ort. | - | **11.74** | Yeni |
+| Turnuva Korelasyonu | 0.660 | **0.696** | +0.036 |
+| Reg. Korelasyonu | 0.70 | **0.642** | -0.058 |
+| Turnuva WScore Ort. | 79.0 | **76.95** | -2.05 |
+| Turnuva LScore Ort. | 67.3 | **65.13** | -2.17 |
+| Turnuva PointDiff Ort. | 11.74 | **11.82** | +0.08 |
+| Turnuva TotalScore Ort. | 146.3 | **142.08** | -4.22 |
 
-**Yorum:** Pozitif korelasyon (0.642) - kazanan takımın skoru ile kaybedenin skoru arasında ilişki var.
+**🚨 KRİTİK DÜZELTME:** Önceki dosyada FARKLI DÖNEMLERDEN karışık değerler vardı:
+- WScore/LScore/TotalScore → 1985-1999 eski dönemden
+- PointDiff/Korelasyon → 2003-2025 döneminden
+
+Şimdi tüm değerler **1985-2025 tam dönem** için tutarlı şekilde doğrulandı.
+
+**Yorum:** Pozitif korelasyon (0.696 turnuva, 0.642 regular) - kazanan takımın skoru ile kaybedenin skoru arasında güçlü ilişki var (tempo etkisi).
 
 ---
 
@@ -149,7 +160,7 @@ Bu dosya sadece özet içerir. Detaylı analizler için:
 | 🥈 2 | **MasseyRankDiff** | Kazanan %69.8 daha iyi rank | -28.47 |
 | 🥉 3 | **Ev Sahipliği** | Kazanan %65.8 ev sahibi | +3.52 |
 | 4 | **RestDaysDiff** | Kazanan %49.9 daha az dinlenmiş | -0.86 |
-| 5 | **Skor Korelasyonu** | Pearson r = 0.642 | +12.02 |
+| 5 | **Skor Korelasyonu** | Turnuva Pearson r = 0.696, Reg. r = 0.642 | +11.82 |
 
 ---
 
