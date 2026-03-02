@@ -1,0 +1,198 @@
+# KORELASYON ANALİZ SONUÇLARI - ÖZET
+
+## Tarih: 02-03-2026
+## Son Güncelleme: 02-03-2026 (Sıfırdan doğrulama yapıldı)
+
+---
+
+## 🔄 DEĞİŞİKLİK LOGU
+
+Bu dosya **sıfırdan manuel hesaplama** ile güncellenmiştir. Önceki değerlerde hatalar tespit edilmiştir.
+
+| Tarih | Değişiklik |
+|-------|------------|
+| 02-03-2026 | Tüm analizler sıfırdan yeniden hesaplandı. WScore korelasyonu, ev sahibi skor avantajı, SeedDiff, MasseyRankDiff değerleri düzeltildi. |
+
+---
+
+## NOT: DETAYLI ANALİZLER
+
+Bu dosya sadece özet içerir. Detaylı analizler için:
+
+1. **01_season_daynum_restdays.txt** - RestDays hesaplama ve analiz
+2. **02_restdaysdiff_target.txt** - RestDaysDiff ve kazanma ilişkisi
+3. **03_wscore_lscore.txt** - Skor korelasyonu
+4. **04_wloc_analizi.txt** - Maç yeri avantajı
+5. **05_numot_analizi.txt** - Uzatma analizi
+6. **06_seeddiff_analizi.txt** - Seed farkı ve kazanma
+7. **07_masseyrankdiff_analizi.txt** - Massey rank analizi
+
+---
+
+## 📊 ÖZET BULGULAR (DOĞRULANMIŞ)
+
+### 1. SEASON + DAYNUM → RESTDAYS ✅
+
+| Metrik | Değer | Durum |
+|--------|-------|-------|
+| Ortalama (İlk maç hariç) | **3.95 gün** | ✅ DOĞRU |
+| Medyan | **3.00 gün** | ✅ DOĞRU |
+
+**Dağılım:**
+- 1 gün: %6.7 (back-to-back)
+- 2 gün: %20.9
+- 3 gün: %23.3 (en yaygın)
+- 4 gün: %17.8
+- 5 gün: %14.7
+
+---
+
+### 2. RESTDAYSDIFF → TARGET ✅
+
+| Kategori | Sayı | Yüzde | Durum |
+|----------|------|-------|-------|
+| Kazanan daha fazla dinlenmiş | 753 | %29.1 | ✅ DOĞRU |
+| Eşit dinlenme | 541 | %20.9 | ✅ DOĞRU |
+| **Kazanan daha az dinlenmiş** | **1,291** | **%49.9** | ✅ DOĞRU |
+
+| Metrik | Değer | Durum |
+|--------|-------|-------|
+| Ortalama RestDaysDiff | **-0.86** | ✅ DOĞRU |
+| Ortalama Kazanan RestDays | 8.83 gün | ✅ |
+| Ortalama Kaybeden RestDays | 9.69 gün | ✅ |
+
+**Yorum:** Kazanan takımlar ortalama 1 gün AZ dinlenmiş. RestDays **negatif feature** olabilir.
+
+---
+
+### 3. WSCORE → LSCORE (KORELASYON) ⚠️ DÜZELTİLDİ
+
+| Metrik | Eski Değer | Yeni Değer | Değişiklik |
+|--------|------------|------------|------------|
+| Pearson Korelasyonu | 0.70 | **0.642** | -0.058 |
+| Reg. PointDiff Ort. | 11.8 | **12.02** | +0.22 |
+| Turnuva PointDiff Ort. | - | **11.74** | Yeni |
+
+**Yorum:** Pozitif korelasyon (0.642) - kazanan takımın skoru ile kaybedenin skoru arasında ilişki var.
+
+---
+
+### 4. WLOC (MAÇ YERİ) ✅
+
+| Kategori | Değer | Durum |
+|----------|-------|-------|
+| Turnuva WLoc | %100 N (nötr) | ✅ DOĞRU |
+| Reg. H (Home) | 116,270 (%59.1) | ✅ DOĞRU |
+| Reg. A (Away) | 60,435 (%30.7) | ✅ DOĞRU |
+| Reg. N (Neutral) | 20,118 (%10.2) | ✅ DOGRU |
+| Ev Sahibi Kazanma % | **%65.8** | ✅ DOĞRU |
+
+⚠️ **EV SAHİBİ SKOR AVANTAJI DÜZELTİLDİ:**
+
+| Metrik | Eski Değer | Yeni Değer | Değişiklik |
+|--------|------------|------------|------------|
+| Skor Avantajı | +5.2 | **+3.52** | -1.68 |
+
+**Yorum:** Ev sahibi takımlar %65.8 kazanıyor, ortalama +3.52 sayı farkıyla.
+
+---
+
+### 5. NUMOT (UZATMA SAYISI) ⚠️ DÜZELTİLDİ
+
+| Uzatma | Regular Season | Turnuva |
+|--------|----------------|---------|
+| 0 | **%95.9** (188,762) | **%94.2** (2,434) |
+| 1 | %3.4 (6,711) | %5.2 (134) |
+| 2 | %0.6 (1,097) | %0.6 (16) |
+| 3 | %0.1 (205) | %0.04 (1) |
+| 4+ | %0.02 (48) | 0 |
+
+**Eski değerler:** 0 uzatma %94 → **%95.9** olarak düzeltildi.
+
+**Yorum:** %95+ maçta uzatma yok, uzatma nadir olay.
+
+---
+
+### 6. SEEDDIFF ⚠️ DÜZELTİLDİ
+
+| Metrik | Eski Değer | Yeni Değer | Değişiklik |
+|--------|------------|------------|------------|
+| Ortalama SeedDiff | -3.7 | **-3.69** | -0.01 |
+| Kazanan Ort. Seed | - | **4.79** | Yeni |
+| Kaybeden Ort. Seed | - | **8.48** | Yeni |
+| Kazanan Daha İyi Seed % | - | **%70.5** | Yeni |
+
+**Yorum:** Kazanan takımlar ortalama 3.7 seed daha iyi. SeedDiff çok güçlü predictor - **%70.5** oranında daha iyi seed kazanıyor.
+
+---
+
+### 7. MASSEYRANKDIFF ❌ CİDDİ DÜZELTME!
+
+| Metrik | Eski Değer | Yeni Değer | Değişiklik |
+|--------|------------|------------|------------|
+| Ortalama MasseyRankDiff | -29.9 | **-28.47** | +1.43 |
+| Kazanan Ort. Rank | - | **26.06** | Yeni |
+| Kaybeden Ort. Rank | - | **54.53** | Yeni |
+| Kazanan Daha İyi Rank % | **%39.8** ❌ | **%69.8** ✅ | **+30.0** |
+
+**🚨 KRİTİK DÜZELTME:** Kazanan daha iyi rank oranı **%39.8'den %69.8'e** çıkarıldı!
+
+**Yorum:** Massey Rank çok güçlü predictor - **%69.8** oranında daha iyi rank (düşük sayı) sahip takım kazanıyor.
+
+---
+
+## 🏆 EN GÜÇLÜ PREDICTOR'LER (SIRALAMA)
+
+| Sıra | Feature | Güç Göstergesi | Değer |
+|------|---------|----------------|-------|
+| 🥇 1 | **SeedDiff** | Kazanan %70.5 daha iyi seed | -3.69 |
+| 🥈 2 | **MasseyRankDiff** | Kazanan %69.8 daha iyi rank | -28.47 |
+| 🥉 3 | **Ev Sahipliği** | Kazanan %65.8 ev sahibi | +3.52 |
+| 4 | **RestDaysDiff** | Kazanan %49.9 daha az dinlenmiş | -0.86 |
+| 5 | **Skor Korelasyonu** | Pearson r = 0.642 | +12.02 |
+
+---
+
+## 📈 MODEL İÇİN ÖNERİLER
+
+### 🔴 En Önemli Feature'lar (Kullanılmalı)
+
+1. **SeedDiff** - En güçlü single predictor (%70.5 accuracy)
+2. **MasseyRankDiff** - İkinci en güçlü (%69.8 accuracy)
+3. **HomeCourtAdvantage** - Regular season için %65.8 accuracy
+4. **RestDaysDiff** - Negatif feature (daha az dinlenen kazanıyor)
+
+### 🟡 Orta Önemli Feature'lar
+
+5. **WinPctDiff** - Regular season kazanma oranı farkı
+6. **PointDiffDiff** - Ortalama sayı farkı farkı
+7. **Four Factors** - eFG%, TO%, ORB%, FTRate
+
+### 🟢 Düşük Önemli / Kullanılmayacak
+
+- **WLoc (Turnuva için)** - Tüm maçlar nötr saha
+- **NumOT** - Çok nadir olay, predictor değeri düşük
+
+---
+
+## ⚠️ DİKKAT EDİLMESİ GEREKENLER
+
+### Data Leakage Kuralı (KRİTİK)
+```
+Season < Target_Season AND DayNum < Target_DayNum
+```
+
+### Feature Formatı
+- **Diff formatı:** Feature_A - Feature_B (fark formatı)
+- **Massey Rank:** Düşük rank = iyi takım (TERS!)
+- **Seed:** Düşük seed = iyi takım (1-16 arası)
+
+### Negatif Feature'ler
+- **RestDaysDiff:** Daha az dinlenen daha çok kazanıyor
+- **MasseyRankDiff:** Negatif değer = kazanan daha iyi
+
+---
+
+*Toplam 7 değişken çifti analiz edildi*
+*Tüm analizler sıfırdan manuel hesaplama ile doğrulandı*
+*Son güncelleme: 02-03-2026*

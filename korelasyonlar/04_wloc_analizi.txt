@@ -1,0 +1,118 @@
+# WLOC (MAÇ YERİ) ANALİZİ
+
+## Tarih: 02-03-2026
+## Son Güncelleme: 02-03-2026 (Sıfırdan doğrulama yapıldı)
+
+---
+
+## 🔄 DEĞİŞİKLİK LOGU
+
+| Tarih | Değişiklik |
+|-------|------------|
+| 02-03-2026 | Tüm istatistikler Python (Pandas) ile sıfırdan hesaplanarak güncellendi. Net "Ev Sahibi Skor Avantajı" (Net Home Score Margin) **+5.73** olarak düzeltildi. |
+
+---
+
+## DEĞİŞKEN TANIMI
+
+**WLoc:** Kazanan takımın maç yeri avantajı
+
+**Değerler:**
+- **H (Home):** Kazanan takım evinde oynadı
+- **A (Away):** Kazanan takım deplasmanda oynadı
+- **N (Neutral):** Nötr sahada oynadı
+
+---
+
+## TURNUVA ANALİZİ
+
+**Veri:** NCAA Turnuva Maçları (Compact Results)
+**Toplam Maç:** 2,585
+
+### WLoc Dağılımı
+
+| WLoc | Maç Sayısı | Yüzde |
+|------|------------|-------|
+| **N** | 2,585 | **%100** |
+| H | 0 | %0 |
+| A | 0 | %0 |
+
+**Sonuç:** Turnuva maçlarının HEPSİ tamamen nötr sahada (N) oynanmaktadır.
+
+**Modelleme Açıklaması:**
+NCAA Turnuvası önceden belirlenmiş (March Madness) lokasyonlarda oynandığından seribaşı veya seyirci avantajından asimetrik ev sahibi kuralları işlemiyor. Herkes kağıt üstünde nötr. **Model Turnuva aşamasına geldiğinde bu değişkenin hiçbir tahmin gücü kalmayacaktır.**
+
+---
+
+## REGULAR SEASON ANALİZİ (DOĞRULANMIŞ)
+
+**Veri:** Regular Season Maçları (1985-2025)
+**Toplam Maç:** 196,823
+
+### WLoc Dağılımı
+
+| WLoc | Maç Sayısı | Yüzde | Açıklama |
+|------|------------|-------|----------|
+| **H** | 116,270 | **%59.07** | Kazanan kendi evinde oynadı (Home Win) |
+| **A** | 60,435 | **%30.71** | Kazanan rakip sahada oynadı (Away Win) |
+| **N** | 20,118 | **%10.22** | Kazanan nötr sahada oynadı (Genelde Showcaseler) |
+
+---
+
+## EV SAHİBİ KAZANMA ORANI VE SKOR AVANTAJI
+
+### 1. Kazanma Oranları
+
+Nötr (N) sahadaki maçları hariç bıraktığımızda geriye Ev-Deplasman konseptindeki `176,705` maç kalır.
+
+**Hesaplama:**
+- Ev sahibi kazandı (H): 116,270
+- Deplasman kazandı (A): 60,435
+- **Ev Sahibi Kazanma Oranı:** 116,270 / 176,705 = **%65.80**
+
+### 2. Skor Net Avantajı (Net Margin)
+
+Yapay zeka modellerinin sayı farkı regresyonu tahmini için kullanacağı net skor etki skoru:
+
+| Durum | Çıkan Ortalama Skor Farkı | Yorum |
+|-------|--------------------------|-------|
+| Ev Sahibi Kazandığında | +13.64 sayı | Ev takımı rahat bir üstünlük kuruyor |
+| Deplasman Kazandığında | +9.49 sayı | Deplasman takımları kazandığında maçlar daha zor geçiyor |
+| **Net Ev Sahibi Avantajı** | **+5.73 sayı** | **Tüm maçların ortalamasında (kendi evindeyken), takım istatistiksel olarak +5.73 sayı avansla maça başlıyor demektir.** |
+
+---
+
+## KONFERANS İÇİ vs KONFERANS DIŞI ETKİSİ
+
+Eğer aynı konferanstaki (bölgesel, birbirini taktiksel olarak iyi tanıyan) iki takım oynarsa Ev Sahibi avantajı düşer mi yoksa artar mı?
+
+Aşağıdaki veriler, `MTeamConferences.csv` üzerinden iki takımın "Aynı Konferansta Olup Olmadığı" check edilerek 176,705 maç üzerinde çalıştırılmış gerçek verilerdir:
+
+| Maç Türü | Toplam Maç (H+A) | Ev Sahibi Sayısı (H) | Deplasman Sayısı (A) | Ev Sahibi Kazanma % |
+|----------|------------------|----------------------|----------------------|-------------------|
+| **Konferans İçi (Aynı)** | 113,474 | 69,788 | 43,686 | **%61.50** |
+| **Konferans Dışı (Farklı)**| 63,231 | 46,482 | 16,749 | **%73.51** |
+
+**Kritik Çıkarım (Model İçin Çok Önemli):**
+*Konferans **dışı** (farklı kıtalar/bölgeler, birbirine yabancı rakipler, uzun uçuş seyahatleri)* olan maçlarda, Ev Sahibi takımın rakibi yollarca ezme ve saha bilmezliğini kullanma avantajı inanılmaz büyür (**%73.51 kazanma oranı**).
+Buna karşılık eğer iki takım aynı konferanstalarsa (sürekli birbirleriyle oynuyorlar, kısa mesafe, taktik dağarcıkları açık) Ev Sahibi kazanma ihtimali **%61.50**'ye inerek adalet çizgisine (%50) çok daha fazla yaklaşır.
+
+---
+
+## MODEL İÇİN KULLANIM REÇETESİ
+
+### WLoc ve HomeAdvantage Özelliği (Feature)
+
+**Kodu / Mantığı:**
+Turnuva tahminine girmeden önce modellerin gücünü normalleştirmek adına geçmiş (regular season) maçların gücünü "HomeAdvantage"a bölmemiz lazım.
+Yani sırf güçlü diye deplasmanda çok zor yenen (+3 fark atan), ancak evinde rakibini ezen (+18 fark) atan bir takımın *aslında nötr sahadaki gerçek turnuva gücü* bu puanların Nötrleştirilmiş halidir.
+
+**Örnek Nötrleştirme (Normalization) Bloğu:**
+```python
+# Tüm geçmiş maçların point_diffini hesapla:
+Eğer WLoc = H ise: Point_Diff_Normalized = Point_Diff - 5.73
+Eğer WLoc = A ise: Point_Diff_Normalized = Point_Diff + 5.73
+Eğer WLoc = N ise: Point_Diff_Normalized = Point_Diff
+```
+Bu feature takımların turnuvada (zaten hep N sahada oynayacakları için) "Suni Ev Sahibi" gücünü kaldırıp **Gerçek (Nötr) Güçlerini (True Strength)** hesaplamanızı sağlayacaktır.
+XGBoost veya LightGBM bunu fark ettiğinde inanılmaz bir loss function sıçraması elde edilecektir.

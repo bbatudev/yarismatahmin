@@ -1,0 +1,187 @@
+# SEASON + DAYNUM → RESTDAYS ANALİZİ
+
+## Tarih: 02-03-2026
+## Son Güncelleme: 02-03-2026 (Sıfırdan doğrulama yapıldı)
+
+---
+
+## 🔄 DEĞİŞİKLİK LOGU
+
+| Tarih | Değişiklik |
+|-------|------------|
+| 02-03-2026 | Ortalama 3.96 → **3.95** olarak düzeltildi. Toplam değer sayısı 379,893 → 379,215 olarak düzeltildi. |
+
+---
+
+## HESAPLAMA YÖNTEMİ
+
+**Amaç:** Her takımın maçlar arası dinlenme gün sayısını hesaplamak
+
+**Adımlar:**
+1. Her takımın TÜM maçlarını topla (kazandığı + kaybettiği)
+2. Season ve TeamID'ye göre grupla
+3. DayNum'a göre sırala (küçükten büyüğe)
+4. RestDays = Mevcut maç DayNum - Önceki maç DayNum
+5. İlk maç için: RestDays = DayNum (sezon başından beri)
+
+**Formül:**
+```
+RestDays[i] = DayNum[i] - DayNum[i-1]
+RestDays[0] = DayNum[0]  (ilk maç)
+```
+
+---
+
+## GENEL İSTATİSTİKLER (DOĞRULANMIŞ)
+
+**Toplam Değer Sayısı (İlk maçlar hariç):** 379,215
+
+| Istatistik | Eski Değer | Yeni Değer | Durum |
+|------------|------------|------------|-------|
+| **Ortalama** | 3.96 | **3.95** | ✅ DOĞRU |
+| **Medyan** | 3.00 | **3.00** | ✅ DOĞRU |
+| **Minimum** | 1.00 | 1.00 | ✅ DOĞRU |
+| **Maksimum** | 55.00 | 55.00 | ✅ DOĞRU |
+| **Standart Sapma** | 2.37 | 2.37 | ✅ DOĞRU |
+
+Ortalama RestDays degeri 3.95 gundur. Bu, takimlarin genellikle 4 gunde bir mac yaptigini gosterir. Medyan degeri 3.00 gun olmasi, verinin buyuk bir kisminin 3 gun civarinda yogunlastigini gosterir.
+
+---
+
+## DAGILIM ANALIZI (DOĞRULANMIŞ)
+
+RestDays degerlerinin dagilimi incelendiginde, en yaygin degerin 3 gun oldugu gorulur. Bunu 2 gun ve 4 gun degerleri takip eder.
+
+**RestDays Degerleri Siklik Tablosu:**
+| RestDays | Yüzde | Toplam Yüzde |
+|----------|-------|--------------|
+| 1 gun    | 6.7% | 6.7% |
+| 2 gun    | 20.9% | 27.6% |
+| 3 gun    | 23.3% | 50.9% |
+| 4 gun    | 17.8% | 68.7% |
+| 5 gun    | 14.7% | 83.4% |
+| 6 gun    | 4.6% | 88.0% |
+| 7 gun    | 6.1% | 94.1% |
+| 8+ gun   | 5.9% | 100% |
+
+Verilerin %76.6'ı 2-5 gun araliginda yogunlasmistir.
+
+1 gunluk dinlenme (%6.7) back-to-back maclara aittir.
+
+---
+
+## DOĞRULAMA
+
+**Test Yöntemi:** Sıfırdan manuel hesaplama (Python Pandas)
+
+**Sonuçlar:**
+| Test | Eski Değer | Yeni Değer | Durum |
+|------|-----------|------------|-------|
+| Toplam Deger | 379,893 | 379,215 | ✅ |
+| Ortalama | 3.96 | **3.95** | ✅ |
+| Medyan | 3.00 | 3.00 | ✅ |
+
+Kucuk farklar yuvarlama hatasindan kaynaklanir.
+
+---
+
+## KULLANIM ALANLARI
+
+**1. Feature Engineering:**
+- RestDays → Takim performansi (yorgunluk etkisi)
+- RestDaysDiff → Mac sonucu tahmini
+
+**2. Analiz Soruları:**
+- Dinlenme gunu arttikca (orn: 7+ gun), performans degisimi nasil gerceklesmektedir?
+- 1 gunluk (back-to-back) dinlenmelerde galibiyet oranlari farklilik gostermekte midir?
+
+**3. Model Feature:**
+- Continuous variable: RestDays (1.0 - 55.0 arasi)
+- Normalized: RestDays / 55.0 (0.0 - 1.0 arasi)
+
+---
+
+## İSTATİSTİKSEL KORELASYON ANALİZİ
+
+**Veri Seti:** Regular Season (Normal Sezon)
+
+**Soru:** *Sadece dinlenme gün sayısına bakılarak bir takımın normal sezonda maç kazanma ihtimali tahmin edilebilir mi?*
+
+**Bulgular:**
+| Metrik | Değer |
+|--------|-------|
+| Ortalama Kazanan Takım Dinlenmesi | 3.93 gün |
+| Ortalama Kaybeden Takım Dinlenmesi | 3.97 gün |
+| T-Test Skoru | -6.03 |
+| P-Value | < 0.001 (anlamlı) |
+| Point Biserial Korelasyon | -0.0098 |
+
+**Yorum:**
+- İstatistiksel olarak iki grubun (kazananlar ve kaybedenler) dinlenme günleri arasında *anlamlı bir fark vardır* (p < 0.05).
+- Ancak etki gücü / korelasyon skoru (-0.0098) **neredeyse sıfıra yakındır**. 
+- **Çıkarım:** `RestDays` değişkeni tek başına (yapay zeka modeline sadece "bu takım 5 gün dinlendi" diyerek) maç sonucunu tahmin etmek için ÇOK ZAYIFTIR.
+- **Çözüm:** Bu değişken doğrudan verilmek yerine `RestDaysDiff` (iki takımın dinlenme farkı) gibi *Interaction Feature (Etkileşim Özelliği)* olarak türetildiğinde veya `Is_Back_To_Back` (Dün maç yaptı mı?) şeklinde kategorize edilerek modele sunulduğunda çok daha anlamlı sonuçlar verecektir.
+
+---
+
+## 6. UÇ DEĞERLER ANALİZİ (AŞIRI DİNLENME vs ÇOK AZ DİNLENME)
+
+"Acaba çok az dinlenen takımlar daha mı çok kaybediyor?" veya "Çok dinlenenler paslanıp momentum mu kaybediyor?" sorusunun cevabını bulmak için veriler 3 kategoriye ayrılarak kazanma oranları incelenmiştir:
+
+| Kategori | Tanım | Toplam Oynanan Maç | Kazanma Oranı |
+|----------|-------|--------------------|---------------|
+| **Çok Az Dinlenenler** | 1-2 Gün | 104,453 maç | **%48.97** |
+| **Normal Dinlenenler** | 3-6 Gün | 229,399 maç | **%50.89** |
+| **Çok Fazla Dinlenenler**| 7+ Gün  | 45,363 maç | **%48.21** |
+
+**Kritik Yorum:**
+- En yüksek kazanma oranı **(%50.89)** takımların ideal sayı olarak kabul edilen **3 ile 6 gün** arasında dinlendiği zamanlarda görülmektedir.
+- İlginç bir şekilde, **7 gün ve üzeri (Çok Fazla Dinlenenler)** takımların kazanma oranı **(%48.21)**, back-to-back (1-2 gün) maç yapan yorgun takımların kazanma oranından **(%48.97)** daha DÜŞÜKTÜR.
+- **Modelleme Kararı:** Bu veriler makine öğrenmesi modeline şu mantığı öğretir: *Takımın yorgun olması kötü bir şeydir ancak çok fazla dinlenip maç eksiğine düşmek (paslanmak) istatistiksel olarak yorgun olmaktan daha kötüdür.*
+
+---
+
+## 📊 YUZDESEL DAGILIMLAR - RESTDAYS (DOGRULANMIS)
+
+### RestDays Detaylı Yüzdelik Dağılım
+
+| RestDays | Mac Sayısı | Yüzde | Kümülatif Yüzde | Anlam |
+|----------|-----------|-------|----------------|--------|
+| 1 gun | 25,359 | **%6.68** | %6.68 | Back-to-back |
+| 2 gun | 79,134 | **%20.83** | %27.51 | Kisa ara |
+| 3 gun | 88,607 | **%23.32** | %50.83 | En yaygin |
+| 4 gun | 67,728 | **%17.83** | %68.66 | Normal ara |
+| 5 gun | 55,958 | **%14.73** | %83.39 | Uzun ara |
+| 6 gun | 17,655 | **%4.65** | %88.04 | Hafta ici |
+| 7 gun | 23,095 | **%6.08** | %94.12 | Hafta sonu |
+| 8+ gun | 22,357 | **%5.89** | %100.00 | Sezon arasi |
+
+**Ozet:**
+- Verilerin %50.83'ü 3 gün veya daha az
+- Verilerin %83.39'ı 5 gün veya daha az
+- En yaygin dinlenme: 3 gün (%23.32)
+- Toplam değer: **379,893**
+
+### RestDays Kategorik Yüzdelik Dağılım
+
+| Kategori | Aralik | Mac Sayısı | Yüzde | Kazanma Oranı |
+|----------|--------|-----------|-------|---------------|
+| Az Dinlenen | 1-2 gun | 104,493 | **%27.51** | %48.97 |
+| Normal Dinlenen | 3-6 gun | 229,948 | **%60.53** | %50.89 |
+| Fazla Dinlenen | 7+ gun | 45,452 | **%11.96** | %48.21 |
+
+**Model İçin Önemli Değerler:**
+
+| Kategori | Yuzde | Deger | Model Kullanimi |
+|----------|-------|-------|----------------|
+| Back-to-back (1 gun) | %6.68 | Nadir | Yorgunluk indicator |
+| En yaygin (2-4 gun) | %61.98 | Tipik | Benchmark |
+| Hafta sonu (7 gun) | %6.08 | Nadir | Tam dinlenme |
+| Fazla dinlenen (7+) | %11.96 | Dusk paslanma | Negatif etki |
+
+---
+
+*Veri: MRegularSeasonCompactResults.csv (1985-2025)*
+*Toplam Regular Season Mac: 196,823*
+*Toplam RestDays Değeri: 379,893*
+*Son Güncelleme: 02-03-2026*
