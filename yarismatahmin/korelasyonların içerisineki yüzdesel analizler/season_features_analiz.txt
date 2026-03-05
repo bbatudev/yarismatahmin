@@ -1,0 +1,165 @@
+# SEASON FEATURES KORELASYON ANALIZI
+
+## Tarih: 02-03-2026
+
+---
+
+## 1. SEASON LENGTH (Sezon Uzunluğu)
+
+**Hesaplama (DOĞRU):**
+- DayZero'dan bir sonraki sezonun DayZero'suna kadar gün sayısı
+- Datetime farkı hesaplandı
+
+**Sonuçlar:**
+- Ortalama sezon uzunluğu: **365.4 gün**
+- En kısa sezon: **364 gün** (33 sezon)
+- En uzun sezon: **371 gün** (8 sezon - artık yıl etkisi)
+- Standart sapma: **2.8 gün**
+
+**Dağılım:**
+| Uzunluk | Sezon Sayısı |
+|---------|--------------|
+| 364 gün | 33 sezon |
+| 371 gün | 8 sezon |
+
+**Yorum:**
+- Çok az varyasyon var (sadece 7 gün fark)
+- Artık yıl etkisi görülüyor
+- Target ile korelasyon beklenmez (çok az değişkenlik)
+
+---
+
+## 2. REGION STRENGTH (Bölge Gücü)
+
+**Hesaplama (DOĞRU):**
+- Her bölgeden kazanan/kaybeden takım sayısı
+- WinRate = Wins / (Wins + Losses)
+- Sezon bazında ve toplam hesaplandı
+
+**Toplam Sonuçlar (Tüm Sezonlar):**
+| Bölge | Kazanma | Kayıp | Toplam Maç | Kazanma Oranı |
+|-------|---------|-------|------------|---------------|
+| Z | 646 | 641 | 1,287 | **50.19%** |
+| X | 648 | 644 | 1,292 | **50.15%** |
+| Y | 648 | 649 | 1,297 | **49.96%** |
+| W | 643 | 651 | 1,294 | **49.69%** |
+
+**Son 3 Sezon Analizi:**
+
+**2025 Sezonu:**
+| Bölge | Kazanma Oranı |
+|-------|---------------|
+| Z | **53.12%** |
+| X | 50.00% |
+| W | 48.48% |
+| Y | 48.57% |
+
+**2024 Sezonu:**
+| Bölge | Kazanma Oranı |
+|-------|---------------|
+| W | **53.12%** |
+| Y | 50.00% |
+| X | 48.48% |
+| Z | 48.48% |
+
+**2023 Sezonu:**
+| Bölge | Kazanma Oranı |
+|-------|---------------|
+| Z | **52.94%** |
+| X | 50.00% |
+| W | 48.48% |
+| Y | 48.48% |
+
+**Yorum:**
+- Bölgeler arası fark çok küçük (tümü %50 civarında)
+- Maksimum fark: %0.5 (Z ile W arası)
+- Her sezon farklı bölge öne çıkıyor (tutarlı pattern yok)
+- Target ile güçlü korelasyon beklenmez
+
+---
+
+## 3. REGION DISTRIBUTION (Bölge Dağılımı)
+
+**Seeds Dosyasından:**
+| Bölge | Takım Sayısı |
+|-------|--------------|
+| W | 659 |
+| Y | 659 |
+| X | 655 |
+| Z | 653 |
+
+**Yorum:**
+- Bölgeler neredeyse eşit dağılmış
+- Her bölgede ~16 takım/sezon (64 takım / 4 bölge)
+
+---
+
+## 4. SEED NUMBER DISTRIBUTION
+
+**Dağılım:**
+| Seed | Takım Sayısı |
+|------|--------------|
+| 1-15 | 160-162 her biri |
+| 16 | 198 (play-in games) |
+
+**Yorum:**
+- Her seed numarası dengeli dağılmış
+- 16. seed biraz fazla (play-in maçları)
+
+---
+
+## 5. VERIFICATION (Doğrulama)
+
+**Test 1: Sezon Uzunluğu**
+- Manuel hesaplama: 2023-2024 arası = 371 gün
+- Script hesaplama: 371 gün
+- ✓ DOĞRU
+
+**Test 2: Bölge Gücü (2025)**
+- Manuel: Z bölgesi 17 kazanma, WinRate = 0.5312
+- Script: Z bölgesi 17 kazanma, WinRate = 0.5312
+- ✓ DOĞRU
+
+**Test 3: Seeds Parsing**
+- Orijinal kayıt: 2,626
+- İşlenmiş kayıt: 2,626
+- Rastgele örnek: W15 → Region=W, SeedNum=15
+- ✓ DOĞRU
+
+---
+
+## 6. OLUŞTURULAN DOSYALAR
+
+1. **data/season_features.csv**
+   - Season, SeasonLength
+   - 42 sezon
+
+2. **data/region_strength.csv**
+   - Season, Region, Wins, Losses, TotalGames, WinRate
+   - 160 kayıt (40 sezon × 4 bölge)
+
+3. **data/seeds_with_region.csv**
+   - Season, TeamID, Region, SeedNum
+   - 2,626 kayıt
+
+---
+
+## ÖZET
+
+**Güçlü Feature'lar:**
+- Yok (çok az varyasyon)
+
+**Zayıf Feature'lar:**
+- SeasonLength: Sadece 7 gün fark, çok az değişkenlik
+- RegionStrength: Tüm bölgeler %50 civarında, pattern yok
+
+**Öneriler:**
+- Bu feature'lar tek başına zayıf
+- Ancak interaction feature olarak kullanılabilir:
+  - Region × Seed (hangi bölgede hangi seed daha başarılı?)
+  - SeasonLength × Performance (uzun sezonda yorgunluk etkisi?)
+
+---
+
+*Toplam 3 yeni feature analiz edildi*
+*Tüm hesaplamalar doğrulandı ✓*

@@ -1,0 +1,181 @@
+# RESTDAYSDIFF → TARGET ANALİZİ
+
+## Tarih: 02-03-2026
+## Son Güncelleme: 02-03-2026 (Sıfırdan doğrulama yapıldı)
+
+---
+
+## 🔄 DEĞİŞİKLİK LOGU
+
+| Tarih | Değişiklik |
+|-------|------------|
+| 02-03-2026 | Tüm değerler sıfırdan doğrulandı. Toplam maç sayısı 2,585 olarak doğrulandı. |
+
+---
+
+## HESAPLAMA YÖNTEMİ
+
+**Amaç:** Turnuvada kazanan ve kaybeden takımların dinlenme farkının maç sonucuna tam sayısal etkisini ölçmek
+
+**Adımlar:**
+1. Her takımın son regular season maçını bul (Season, TeamID → LastRegDayNum)
+2. Turnuva maçı için RestDays hesapla: TourneyDayNum - LastRegDayNum
+3. RestDaysDiff hesapla: Winner_RestDays - Loser_RestDays
+4. RestDaysDiff ile Target (kazanma) verisini eşleştir
+
+**Formül:**
+```
+W_RestDays = TourneyDayNum - W_LastRegDayNum
+L_RestDays = TourneyDayNum - L_LastRegDayNum
+RestDaysDiff = W_RestDays - L_RestDays
+```
+
+---
+
+## GENEL İSTATİSTİKLER (DOĞRULANMIŞ)
+
+**Veri Seti:** NCAA Turnuva Maçları (Tüm sezonlar: 1985-2025)
+**Toplam Maç:** 2,585
+
+### RestDaysDiff Dağılımı
+
+| Durum | Maç Sayısı | Yüzde | Açıklama |
+|-------|------------|-------|----------|
+| **RestDaysDiff > 0** | 753 | **%29.1** | Kazanan takım DAHA FAZLA dinlenmiş |
+| **RestDaysDiff = 0** | 541 | **%20.9** | Eşit dinlenme süresi |
+| **RestDaysDiff < 0** | 1,291 | **%49.9** | Kazanan takım DAHA AZ dinlenmiş |
+
+**Ortalama RestDaysDiff:** -0.86 gün
+
+---
+
+## İSTATİSTİKSEL BULGULAR
+
+### RestDaysDiff Değer Aralıkları
+
+| RestDaysDiff Aralığı | Maç Sayısı | Yüzde |
+|----------------------|------------|-------|
+| ≤ -11 gün | 2 | %0.1 |
+| -10 ile -6 gün arası | 228 | %8.8 |
+| -5 ile -1 gün arası | 1,061 | %41.0 |
+| **0 (Eşit)** | **541** | **%20.9** |
+| 1 ile 5 gün arası | 684 | %26.5 |
+| 6 ile 10 gün arası | 69 | %2.7 |
+| ≥ 11 gün | 0 | %0.0 |
+
+**Gözlem:** Takımların %88.4'ü aralarındaki dinlenme farkı -5 ile +5 aralığında.
+
+---
+
+## ÖNEMLİ YORUM: AZ DINLENEN KAZANIYOR!
+
+### Kazanan Daha Az Dinlenmiş (%49.9)
+
+**Açıklama:**
+Turnuva ilk maçlarında kazanan tarafın büyük çoğunlukla "daha az dinlenmiş" olması bir anomaly DEĞİLDİR. Konferans turnuvalarında başarılı takımlar, NCAA turnuvasına formda ancak takvimsel olarak daha az dinlenmiş (4-8 gün) biçimde gelirler. İlk turlarda elenen zayıf takımlar ise genellikle daha uzun dinlenme süresine sahiptir.
+
+**Anlam:**
+- Daha iyi takımlar = Konferans turnuvasında daha fazla maç = Daha az dinlenme = Daha sık kazanma
+- RestDaysDiff **negatif feature** olabilir!
+
+---
+
+## MODEL İÇİN KULLANIM
+
+### Feature Model Kullanımı Önerisi
+
+**1. RestDaysDiff Feature:**
+```python
+# Direkt kullan
+RestDaysDiff = W_RestDays - L_RestDays
+
+# Kategorik kullan
+if RestDaysDiff < -3:
+    RestDaysDiff_Category = "Winner_Much_Less_Rested"
+elif RestDaysDiff < 0:
+    RestDaysDiff_Category = "Winner_Less_Rested"
+elif RestDaysDiff == 0:
+    RestDaysDiff_Category = "Equal"
+else:
+    RestDaysDiff_Category = "Winner_More_Rested"
+```
+
+**2. Interaction Features:**
+- RestDaysDiff × SeedDiff (Seed farkı ve dinlenme durumu formülleri)
+- RestDaysDiff × MasseyRankDiff
+
+**3. Dinamik Hesaplama:**
+Turnuvanın 2., 3. veya 4. turlarında takımların güncel dinlenmeleri bir önceki turnuva maçından hesaplanmalıdır.
+
+---
+
+## 📊 YUZDESEL DAGILIMLAR - RESTDAYSDIFF (DOGRULANMIS)
+
+### RestDaysDiff Detaylı Yüzdelik Dağılım
+
+| RestDaysDiff Aralığı | Mac Sayısı | Yüzde | Kümülatif | Anlam |
+|---------------------|-----------|-------|-----------|--------|
+| -5 ve alti | 352 | **%13.6** | %13.6 | Kazanan cok az dinlenmis |
+| -4 ile -3 | 263 | **%10.2** | %23.8 | Kazanan az dinlenmis |
+| -2 ile -1 | 676 | **%26.2** | %50.0 | Kazanan biraz az dinlenmis |
+| **0 (Esit)** | **541** | **%20.9** | **%70.9** | Esit dinlenme |
+| +1 ile +2 | 518 | **%20.0** | %90.9 | Kazanan biraz fazla dinlenmis |
+| +3 ile +4 | 116 | **%4.5** | %95.4 | Kazanan fazla dinlenmis |
+| +5 ve ustu | 119 | **%4.6** | %100.0 | Kazanan cok fazla dinlenmis |
+
+**Ozet:**
+- Maclarin %50.0'si kazanan daha az dinlenmis (RestDaysDiff < 0)
+- Maclarin %29.1'i kazanan daha fazla dinlenmis (RestDaysDiff > 0)
+- Maclarin %20.9'unda esit dinlenme (RestDaysDiff = 0)
+- Toplam mac: **2,585**
+
+### Kazanma Orani Yuzdelik Dagilimi
+
+| Kategori | RestDaysDiff | Mac Sayısı | Yüzde | Kazanma Orani |
+|----------|--------------|-----------|-------|---------------|
+| Kazanan Az Dinlenmis | < 0 | 1,291 | **%49.9** | Var (zaten kazanan) |
+| Esit Dinlenme | = 0 | 541 | **%20.9** | Var (zaten kazanan) |
+| Kazanan Fazla Dinlenmis | > 0 | 753 | **%29.1** | Var (zaten kazanan) |
+
+**Not:** Bu tablo "kazanan tarafin dinlenme durumunu" gosterir. Veri seti zaten kazanan maclari icerdigi icin kazanma oranlari %100'dir. Ancak RestDaysDiff'in dagilimi, "daha az dinlenen takimin daha fazla kazanma egiliminde oldugunu" gostermektedir.
+
+### RestDaysDiff Araliklarina Gore Kazanma
+
+| Aralik | Aciklama | Yuzde | Model Kullanimi |
+|--------|-----------|-------|----------------|
+| -5 ve alti | Kazanan 5+ gun az dinlenmis | %13.6 | Strong negative indicator |
+| -4 ile -1 | Kazanan 1-4 gun az dinlenmis | %36.4 | Negative indicator |
+| 0 | Esit dinlenme | %20.9 | Neutral |
+| +1 ile +4 | Kazanan 1-4 gun fazla dinlenmis | %24.5 | Positive indicator |
+| +5 ve ustu | Kazanan 5+ gun fazla dinlenmis | %4.6 | Strong positive indicator (nadir) |
+
+**Model Icin Onemli Degerler:**
+
+| Kategori | Yuzde | Deger | Model Kullanimi |
+|----------|-------|-------|----------------|
+| Az dinlenen kazanan | %49.9 | En yaygin | Negatif feature |
+| Esit dinlenme | %20.9 | Ikinci en yaygin | Neutral |
+| Fazla dinlenen kazanan | %29.1 | Az yaygin | Pozitif indicator |
+| Cok az dinlenen (-5+) | %13.6 | Nadir | Strong negative |
+| Cok fazla dinlenen (+5+) | %4.6 | Cok nadir | Strong positive |
+
+---
+
+## SONUÇ
+
+**Ana Bulgular:**
+
+1. **%49.9 Kazanan Daha Az Dinlenmiş:** Turnuvada kazanan takımlar genellikle daha az dinlenmiş
+2. **Ortalama -0.86:** Kazanan ortalama 1 gün daha az dinlenmiş
+3. **Negatif Feature:** RestDaysDiff negatif yönde predictor olabilir
+
+**Model İçin:**
+- RestDaysDiff kullanın (kategorik veya continuous)
+- Interaction feature'lar oluşturun
+- Turnuva turları arasında dinamik hesaplayın
+
+---
+
+*Veri Kaynağı: MNCAATourneyCompactResults.csv, MRegularSeasonCompactResults.csv*
+*Toplam Turnuva Mac: 2,585*
+*Son Güncelleme: 02-03-2026*
