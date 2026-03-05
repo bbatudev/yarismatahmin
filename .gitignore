@@ -1,0 +1,16 @@
+# Raw Kaggle verisi
+mania_pipeline/data/raw/
+*.zip
+
+# Python
+__pycache__/
+*.py[cod]
+.DS_Store
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# Requirements
+mania_pipeline/requirments.txt
