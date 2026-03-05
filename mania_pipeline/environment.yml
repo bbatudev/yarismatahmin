@@ -1,0 +1,18 @@
+name: march_mania
+channels:
+  - conda-forge
+
+dependencies:
+  - python=3.11
+  - pandas
+  - numpy
+  - scikit-learn
+  - lightgbm
+  - pyarrow
+  - matplotlib
+  - tqdm
+  - seaborn
+  - pip
+  - pip:
+      - kaggle
+      - optuna

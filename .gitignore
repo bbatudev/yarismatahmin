@@ -1,52 +1,16 @@
+# Raw Kaggle verisi
+mania_pipeline/data/raw/
+*.zip
+
 # Python
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
-.Python
-env/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# Virtual environments
-venv/
-env/
-.env/
+.DS_Store
 .env
-ENV/
 
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# VS Code / IDE
+# IDE
 .vscode/
 .idea/
-*.swp
-*.swo
 
-# Project specific data and logs
-data/*
-!data/.gitkeep
-
-march-machine-leraning-mania-2026/*
-!march-machine-leraning-mania-2026/.gitkeep
-
-*.csv
-*.log
-
-# MCP / AI Agent Folders
-.claude/
-.playwright-mcp/
+# Requirements
+mania_pipeline/requirments.txt
