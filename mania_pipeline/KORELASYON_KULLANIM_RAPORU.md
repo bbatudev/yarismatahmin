@@ -22,19 +22,6 @@ HOME_COURT_ADVANTAGE = 5.73
   - Satır 85-87: Kazanan takımın margin'ini düzelt
   - Satır 96-98: Kaybeden takımın margin'ini düzelt
 
-**💡 Mantık:**
-```
-Evde Kazanan Gerçek Gücü = Ham Skor Farkı - 5.73
-Deplasmanda Kazanan Gerçek Gücü = Ham Skor Farkı + 5.73
-Nötr Sahada = Ham Skor Farkı (değişmez)
-```
-
-**📈 Etki:**
-- Turnuva nötr sahada olduğu için takımların "gerçek gücü" hesaplanmış oluyor
-- Feature: `TrueMargin`, `TrueMarginAvg_diff`
-
----
-
 ### 2. **01_season_daynum_restdays.txt** → FATIGUE FLAGS
 
 **📍 Code Konumu:** Satır 203-217
@@ -54,18 +41,8 @@ def build_rest_days(gl):
   - **Is_Rusty (≥7 gün):** Paslanma/ritim kaybı riski
   - **Is_Back_To_Back (≤2 gün):** Yorgunluk riski
 
-**💡 Mantık:**
-```
-RestDays >= 7  → Is_Rusty = 1       (Çok dinlenmiş → Ritim kaybı)
-RestDays <= 2  → Is_Back_To_Back = 1 (Çok az dinlenmiş → Yorgun)
-RestDays 3-6   → Normal (Her iki flag = 0)
-```
 
-**📈 Etki:**
-- Feature: `RestDays_diff`, `Is_Rusty_diff`, `Is_Back_To_Back_diff`
-- Model bu etkileşimleri öğrenebiliyor
 
----
 
 ## ❌ KULLANILMAYAN KORELASYON ANALİZLERİ
 
@@ -73,68 +50,96 @@ Bu dosyalar **araştırma aşamasında** yazılmış ama henüz **koda eklenmemi
 
 ### 1. **02_restdaysdiff_target.txt**
 **İçerik:** RestDays farkı ile kazanma olasılığı arasındaki korelasyon  
-**Durum:** ❌ Direkt kullanılmamış (ama RestDays feature olarak var)  
-**Potansiyel:** `RestDays_diff` zaten modele girmiş, bu analiz bulguları implicit olarak kullanılıyor
+**Durum:** ⚠️ DOLAYLI KULLANILDI  
+**Açıklama:** `RestDays_diff` zaten modele girmiş, bu analiz bulguları dolaylı olarak kullanılıyor
 
 ---
 
 ### 2. **03_wscore_lscore.txt**
 **İçerik:** Kazanan ve kaybeden skor analizi  
-**Durum:** ❌ Kullanılmamış  
-**Neden:** `AvgScore`, `AvgOppScore`, `TotalScore` (tempo) zaten feature olarak var  
-**Potansiyel:** Score variance veya tempo etkileşimleri eklenebilir
+**Durum:** ⚠️ DOLAYLI KULLANILMIŞ  
+**Neden:** `AvgScore`, `AvgOppScore`, `TotalScore` (tempo), `TrueMarginAvg`, `ScoreVariance` zaten feature olarak var. Bu üçlü (merkez + oran + yayılım) skor dağılımını yeterince kapsar.  
+**Analiz (07-03-2026):** `BlowoutRate` (21+ fark) ve `AvgWinMargin` (kazanma ortalaması) incelendi; mevcut feature'larla yüksek korelasyon ve 2,898 satırlık veri setinde overfit riski nedeniyle eklenmedi. TrueMarginAvg + WinPct + ScoreVariance mevcut bilgiyi zaten kapsar.
 
 ---
 
 ### 3. **05_numot_analizi.txt**
 **İçerik:** Overtime (uzatma) maçları analizi  
-**Durum:** ❌ Kullanılmamış  
-**Neden:** NumOT bilgisi turnuva tahmininde kullanılamaz (maçtan önce bilinmiyor)  
-**Potansiyel:** "Geçmiş sezon overtime maç sayısı" gibi bir özellik eklenebilir
+**Durum:** ❌ DEĞERLENDİRİLDİ — EKLENMEDİ (07-03-2026)  
+**Gerekçe (Sayılarla):**
 
----
+| Feature | Kullanılabilir Örnek | Varyans | Karar |
+|---------|---------------------|---------|-------|
+| `PrevNumOT` | ~75 satır (%2.6) | Düşük | ❌ |
+| `Extreme_Fatigued` | ~15 satır (%0.5) | Çok düşük | ❌ |
+| `OT_Rate` | 2,898 satır | 0.03 (%3) | ❌ |
+
+- 2,585 turnuva maçında ~151 uzatmalı maç (%5.84) — ilk turu çıkarınca ~75 gerçek örnek
+- `Extreme_Fatigued` (PrevNumOT > 0 AND RestDays ≤ 2) kesişimi: ~15 satır — öğrenilemez
+- `OT_Rate` varyansı %3 → `RestDays` ve `Is_Back_To_Back` zaten bu bilgiyi kapsıyor
+- **Sonuç:** Sinyal değil gürültü. Eklemek overfitting riski yaratır.
+
 
 ### 4. **06_seeddiff_analizi.txt**
 **İçerik:** Seed farkının kazanma olasılığına etkisi  
-**Durum:** ⚠️ Kısmen kullanılmış  
+**Durum:** ⚠️ DOLAYLI — EK FEATURE EKLENMEDİ (07-03-2026)  
 **Açıklama:**
-- ✅ Seed bilgisi kullanılıyor → `SeedNum`, `SeedNum_diff`
-- ❌ Ama bu analiz dosyasındaki detaylı bulgular direkt eklenmemiş
-**Potansiyel:** Non-linear seed transformations (örn: `abs(SeedNum_diff) > 8` flag'i)
+- ✅ `SeedNum_diff` zaten modele giriyor (sürekli sayı olarak)
+- `SeedNum_diff` tek başına %70.5 accuracy → en güçlü predictor'lardan biri
+- `Heavy_Favorite`, `Upset_Zone`, `Toss_Up` kategorik flag'leri değerlendirildi; LightGBM bu bölümleri zaten kendi öğreniyor, `SeedNum_diff` mevcut bilgiyi yeterince kapsıyor
+- **Sonuç:** Mevcut feature yeterli, ek kategorik flag eklenmedi
 
 ---
 
 ### 5. **07_masseyrankdiff_analizi.txt**
-**İçerik:** Massey ranking farkının etkisi  
-**Durum:** ⚠️ Kısmen kullanılmış  
+**İçerik:** Massey ranking farkının etkisi
+**Durum:** ⚠️ DOLAYLI — EK FEATURE EKLENMEDİ (07-03-2026)
 **Açıklama:**
-- ✅ Massey rankings kullanılıyor → `MasseyPct`, `MasseyAvgRank_diff`
-- ✅ Rank Agreement (Seed ve Massey uyumu) feature var (Satır 343-346)
-- ❌ Ama analiz dosyasındaki detaylı korelasyon bulguları direkt eklenmemiş
-**Potansiyel:** Weighted consensus (örn: POM'a daha fazla ağırlık)
+- ✅ `MasseyPct_diff`, `MasseyAvgRank_diff` zaten modele giriyor
+- ✅ `Rank_Agreement` (Seed+Massey uyumu) zaten var
+- Weighted Massey değerlendirildi; ağırlıklar subjektif, yeterli veri desteği yok
+
+**Yeni Öneri Değerlendirmeleri (07-03-2026):**
+| Öneri | Karar | Sebep |
+|-------|-------|-------|
+| MedianOrdinalRank | ❌ Zaten var | `MasseyPct` hesaplanırken `.median()` kullanılıyor |
+| Top10SystemsAvg | ❌ Gereksiz | 6 elite sistem (POM, SAG, NET, BPI, MOR, KPI) daha kaliteli |
+| PreTourneyRank | ❌ Zaten var | `RankingDayNum = 133` filtresi zaten turnuva öncesi snapshot |
+| RankTrend | ⏳ Bekle | `WinPct_last21` dolaylı kapsıyor |
+| **StdOrdinalRank** | **⏳ Baseline sonrası** | **Detay aşağıda** |
+
+**StdOrdinalRank Detaylı Analiz:**
+- **Fikir:** 6 sistemin rank'larının standart sapması (belirsizlik ölçüsü)
+- **Artı:** Benzersiz bilgi, "sistem anlaşmazlığı = upset riski" kavramı
+- **Eksi:** Overfitting riski (2,898 satır), POM-SAG-NET %92+ korelasyonlu
+- **Test Planı:** Baseline model kurulduktan sonra ekle, Brier Score improvement kontrol et
+- **Eşik:** Improvement > 0.001 ise keep, değilse discard
+
+- **Sonuç:** Mevcut feature'lar yeterli, StdOrdinalRank baseline sonrası test edilecek
+
 
 ---
 
 ### 6. **08_yuzdesel_analizler.txt**
-**İçerik:** Genel yüzdesel korelasyon analizi  
-**Durum:** ❌ Kullanılmamış  
-**Neden:** Genel özet dosyası, spesifik bir feature üretmiyor  
-**Potansiyel:** Feature importance için referans belgesi
+**İçerik:** Genel yüzdesel korelasyon özeti (01+02+03 birleşimi)  
+**Durum:** ❌ REFERANS BELGESİ — EK FEATURE YOK (07-03-2026)  
+**Açıklama:** Kendi başına yeni analiz veya değişken içermiyor. 01, 02 ve 03 bulgularının özeti. Feature kararları ilgili dosyalarda zaten verildi.
+
 
 ---
 
 ## 📊 KULLANIM TABLOSU (ÖZET)
 
-| Analiz Dosyası | Durum | Code'da Karşılığı | Satır No |
+| Analiz Dosyası | Durum | Kodda Karşılığı | Satır No |
 |---------------|-------|-------------------|----------|
-| **01_season_daynum_restdays.txt** | ✅ KULLANILMIŞ | `Is_Rusty`, `Is_Back_To_Back` | 203-217 |
-| **02_restdaysdiff_target.txt** | ⚠️ İMPLİCİT | `RestDays_diff` | - |
-| **03_wscore_lscore.txt** | ⚠️ İMPLİCİT | `AvgScore`, `TotalScore` | 163 |
-| **04_wloc_analizi.txt** | ✅ KULLANILMIŞ | `HOME_COURT_ADVANTAGE = 5.73` | 25-26 |
-| **05_numot_analizi.txt** | ❌ KULLANILMAMIŞ | - | - |
+| **01_season_daynum_restdays.txt** | ✅ KULLANILDI | `Is_Rusty`, `Is_Back_To_Back` | 203-217 |
+| **02_restdaysdiff_target.txt** | ⚠️ DOLAYLI | `RestDays_diff` | - |
+| **03_wscore_lscore.txt** | ⚠️ DOLAYLI | `AvgScore`, `TotalScore`, `TrueMarginAvg`, `ScoreVariance` | 154-162 |
+| **04_wloc_analizi.txt** | ✅ KULLANILDI | `HOME_COURT_ADVANTAGE = 5.73` | 25-26 |
+| **05_numot_analizi.txt** | ❌ İNCELENDİ, EKLENMEDİ | - | - |
 | **06_seeddiff_analizi.txt** | ⚠️ KISMEN | `SeedNum_diff` | 294-297 |
 | **07_masseyrankdiff_analizi.txt** | ⚠️ KISMEN | `MasseyPct_diff`, `Rank_Agreement` | 343-346 |
-| **08_yuzdesel_analizler.txt** | ❌ KULLANILMAMIŞ | - | - |
+| **08_yuzdesel_analizler.txt** | ❌ KULLANILMADI | - | - |
 
 ---
 
@@ -472,12 +477,77 @@ Overconfident tahminler büyük ceza alır!
 
 ---
 
+## 📅 OTURUM RAPORU (07-03-2026)
+
+### Yapılan İşler
+
+#### 1. Proje İndeksleme
+- ✅ `PROJECT_INDEX.md` oluşturuldu (proje yapısı, fonksiyonlar, korelasyonlar)
+
+#### 2. Feature Engineering Güncellemesi
+**Eklenen feature'lar:**
+| Feature | Açıklama | Satır |
+|---------|----------|-------|
+| `Ideal_Rest` | 3-6 gün dinlenme = 1, diğer = 0 | 217 |
+| `Rest_Score` | Kategorik: 0 (paslanmış), 1 (yorgun), 2 (ideal) | 228 |
+
+**İncelendi ama eklenmedi:**
+| Feature | Neden Eklenmedi |
+|---------|----------------|
+| `BlowoutRate` | TrueMarginAvg + WinPct + ScoreVariance zaten kapsıyor, overfit riski |
+| `AvgWinMargin` | TrueMarginAvg ile yüksek korelasyon |
+| `PrevNumOT` | Çok nadir (~75 örnek, %2.6) |
+| `Extreme_Fatigued` | Daha da nadir (~15 örnek, %0.5) |
+| `OT_Rate` | Varyans çok düşük (%3) |
+
+#### 3. Korelasyon Analizleri Değerlendirildi
+| Korelasyon | Durum | Karar |
+|------------|-------|-------|
+| 01_season_daynum_restdays.txt | ✅ KULLANILDI | RestDays, Is_Rusty, Is_Back_To_Back |
+| 02_restdaysdiff_target.txt | ✅ DOLAYLI | RestDays_diff |
+| 03_wscore_lscore.txt | ✅ DOLAYLI | AvgScore, TrueMarginAvg, ScoreVariance |
+| 04_wloc_analizi.txt | ✅ KULLANILDI | HOME_COURT_ADVANTAGE |
+| 05_numot_analizi.txt | ❌ İNCELENDİ | Hiçbir feature eklenmedi (nadir olay) |
+| 06_seeddiff_analizi.txt | ✅ DOLAYLI | SeedNum_diff (continuous) |
+| 07_masseyrankdiff_analizi.txt | ✅ DOLAYLI | MasseyPct_diff, MasseyAvgRank_diff, Rank_Agreement |
+| 08_yuzdesel_analizler.txt | ✅ ÖZET | Tüm bulgular mevcut feature'larda kapsanıyor |
+
+**Değişken Analizi Klasörleri (07-03-2026) - TAMAMLANDI:**
+- daynum (02_daynum_analizi.md) → ✅ Form/Momentum feature'ları incelendi, mevcut WinPct_last21 yeterli
+- konferans (08_konferans_analizi.md) → ✅ ConfStrength, PowerConf incelendi, mevcut SeedDiff yeterli
+- massey (07_massey_analizi.md) → ✅ StdOrdinalRank baseline sonrası test edilecek
+- metadata (6 dosya) → ✅ Meta veri dosyaları (team_info, locations, coaches...), feature üretimi için kritik değil
+
+
+
+
+- others → ✅ Boş klasör
+- results (2 dosya) → ✅ Skor analizi (WScore, LScore), mevcut feature'larla kapsanıyor
+- season (01_season_analizi.md) → ✅ Time-series split, mevcut Walk-Forward CV yeterli
+- seed (06_seed_analizi.md) → ✅ Seed sistemi, mevcut SeedNum_diff yeterli
+- stats (5 dosya) → ✅ Four Factors (NetRtg, eFG%, TOV%, ORB%, FTr) zaten mevcut
+- teamid (03_teamid_analizi.md) → ✅ TeamID sadece primary key, feature değil
+
+**Sonuç:**
+- 11 klasör tamamlendi (40+ değişken grubu)
+- Tüm önerilen feature'lar mevcut kodla kapsanıyor
+- Hiçbir yeni feature eklenmeye gerek yok
+- Baseline model kurmaya hazır
+
+#### 4. Dosya Güncellemeleri
+- `02_feature_engineering.py` → `Ideal_Rest`, `Rest_Score` eklendi
+- `KORELASYON_KULLANIM_RAPORU.md` → Analiz notları eklendi, Türkçeleştirildi
+- `FINAL_OZET.md` → Tier 2'ye yeni feature'lar eklendi
+- `.gitignore` → Kaggle veri dosyaları eklendi
+
+---
+
 ### 🔄 FAZ 1: KORELASYON ANALİZLERİNİ DEĞERLENDİRME
 
 #### 1.1 Kullanılmayan Korelasyonları Gözden Geçir
 - [ ] **06_seeddiff_analizi.txt** → Detaylı oku, hangi seed farkları kritik?
-- [ ] **03_wscore_lscore.txt** → Scoring patterns'ları incele
-- [ ] **05_numot_analizi.txt** → Overtime istatistiklerini kontrol et
+- [x] **03_wscore_lscore.txt** → ✅ İncelendi, mevcut feature'lar yeterli (07-03-2026)
+- [x] **05_numot_analizi.txt** → ✅ İncelendi, nadir olay, eklenmedi (07-03-2026)
 - [ ] **07_masseyrankdiff_analizi.txt** → Hangi Massey sistem en güvenilir?
 - [ ] **08_yuzdesel_analizler.txt** → Genel korelasyon matrisini oku
 

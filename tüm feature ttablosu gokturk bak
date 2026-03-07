@@ -1,0 +1,94 @@
+📊 Tüm Feature Tablosu (v0.6 Final)
+Men: 62 sütun (2,898 satır) | Women: 57 sütun (1,922 satır)
+
+Meta Sütunlar (Model girdisi DEĞİL)
+#	Sütun	Açıklama
+1	Season	Sezon yılı
+2	TeamA	A takımı ID
+3	TeamB	B takımı ID
+4	Target	1=TeamA kazandı, 0=TeamA kaybetti
+5	Split	Train / Val / Test
+Diferansiyel Feature'lar (TeamA − TeamB)
+Sezon Aggregasyonları
+#	Feature	Açıklama	M	W
+6	WinPct_diff	Galibiyet yüzdesi farkı	✅	✅
+7	AvgScore_diff	Ortalama atılan sayı farkı	✅	✅
+8	AvgOppScore_diff	Ortalama yenilen sayı farkı	✅	✅
+9	TotalScore_diff	Toplam sayı (tempo) farkı	✅	✅
+10	TrueMarginAvg_diff	Nötrleştirilmiş sayı farkı ortalaması	✅	✅
+11	ScoreVariance_diff	Tutarsızlık (std) farkı	✅	✅
+Overtime Profili
+#	Feature	Açıklama	M	W
+12	OTRate_diff	Uzatmaya gitme oranı farkı	✅	✅
+13	AvgOT_diff	Ortalama uzatma sayısı farkı	✅	✅
+14	MultiOTRate_diff	Çoklu uzatma oranı farkı	✅	✅
+Clutch / Yakın Maçlar
+#	Feature	Açıklama	M	W
+15	CloseWinPct_diff	Yakın maç kazanma % farkı (Bayesian smoothed)	✅	✅
+16	CloseGamesCount_diff	Yakın maç sayısı farkı	✅	✅
+Four Factors & Efficiency
+#	Feature	Açıklama	M	W
+17	NetRtg_diff	Net rating (OffRtg−DefRtg) farkı	✅	✅
+18	eFG_diff	Effective FG% farkı	✅	✅
+19	TOVpct_diff	Top kaybı oranı farkı	✅	✅
+20	ORBpct_diff	Hücum ribaund yüzdesi farkı	✅	✅
+21	FTr_diff	Serbest atış oranı farkı (düz)	✅	❌
+22	FTr_vs_OppAllowed_diff	Bağlamsal FTr (kendi − rakibin izin verdiği)	✅	✅
+23	StlPct_diff	Top çalma yüzdesi farkı	✅	✅
+24	BlkPct_diff	Blok yüzdesi farkı	✅	✅
+Rolling Momentum (Son N Maç Formu)
+#	Feature	Açıklama	M	W
+25	WinPct_last7_diff	Son 7 maç win% farkı	✅	✅
+26	WinPct_last10_diff	Son 10 maç win% farkı	✅	✅
+27	WinPct_last14_diff	Son 14 maç win% farkı	✅	✅
+28	WinPct_last21_diff	Son 21 maç win% farkı	✅	✅
+29	Margin_last7_diff	Son 7 maç margin farkı	✅	✅
+30	Margin_last10_diff	Son 10 maç margin farkı	✅	✅
+31	Margin_last14_diff	Son 14 maç margin farkı	✅	✅
+32	Margin_last21_diff	Son 21 maç margin farkı	✅	✅
+Dinlenme & Yorgunluk (YENİ v0.6)
+#	Feature	Açıklama	M	W
+33	DaysSinceLastGame_diff	Son maçtan bu yana gün farkı	✅	✅
+34	GamesLast7Days_diff	Son 7 gündeki maç yükü farkı	✅	✅
+35	GamesLast14Days_diff	Son 14 gündeki maç yükü farkı	✅	✅
+36	B2B_Last14Days_diff	Son 14 gündeki B2B maç sayısı farkı	✅	✅
+Seed
+#	Feature	Açıklama	M	W
+37	SeedNum_diff	Seed numarası farkı	✅	✅
+Konferans
+#	Feature	Açıklama	M	W
+38	ConfStrength_diff	Konferans gücü farkı	✅	✅
+39	ConfWinPct_diff	Konferans kazanma % farkı	✅	✅
+40	ConfTeamCount_diff	Konferans takım sayısı farkı	✅	✅
+41	ConfBidCount_diff	Konferans NCAA bid sayısı farkı	✅	✅
+Konferans Turnuvası (YENİ v0.6)
+#	Feature	Açıklama	M	W
+42	ConfTourneyGamesPlayed_diff	Konf. turnuvasında oynanan maç farkı	✅	✅
+43	ConfTourneyWinPct_diff	Konf. turnuvası kazanma % farkı	✅	✅
+44	ConfTourneyChampion_diff	Konf. şampiyonu bayrak farkı	✅	✅
+45	DaysSinceConfFinal_diff	Konf. finalinden bu yana gün farkı	✅	✅
+Koç & Program (Sadece Men)
+#	Feature	Açıklama	M	W
+46	CoachTenureYears_diff	Koç görev süresi farkı	✅	❌
+47	ProgramAge_diff	Program yaşı (D1 tecrübesi) farkı	✅	❌
+Massey (Sadece Men)
+#	Feature	Açıklama	M	W
+48	MasseyPct_diff	Massey rank yüzdelik farkı	✅	❌
+49	MasseyAvgRank_diff	Massey ortalama sıralama farkı	✅	❌
+Bayrak (Flag) & Kategorik Feature'lar
+#	Feature	Açıklama	M	W
+50	Heavy_Favorite	SeedDiff ≥ 8 → ağır favori	✅	✅
+51	Toss_Up	|SeedDiff| ≤ 3 → denk güçler	✅	✅
+52	TeamA_Is_Favorite	TeamA'nın seed'i daha düşük mü	✅	✅
+53	TeamA_Is_Underdog	TeamA'nın seed'i daha yüksek mü	✅	✅
+54	TeamA_Seed_Top4	TeamA seed 1-4 arası mı	✅	✅
+55	TeamA_Seed_Mid	TeamA seed 5-10 arası mı	✅	✅
+56	TeamA_Seed_Low	TeamA seed 11-16 arası mı	✅	✅
+57	TeamA_Is_11_12_vs_5_6	TeamA 11/12 seed ve rakip 5/6 mı	✅	✅
+58	TeamA_Is_5_6_vs_11_12	TeamA 5/6 seed ve rakip 11/12 mı	✅	✅
+Tur Bağlamı (YENİ v0.6)
+#	Feature	Açıklama	M	W
+59	Round_Num	Tur numarası (1-6)	✅	✅
+60	Is_FirstWeekend	İlk hafta sonu (R64+R32)	✅	✅
+61	Is_SecondWeekend	İkinci hafta sonu (S16+E8)	✅	✅
+62	Is_FinalWeekend	Final Four + Şampiyonluk	✅	✅

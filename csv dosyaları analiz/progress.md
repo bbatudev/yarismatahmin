@@ -23,9 +23,48 @@
 | 01-03-2026 | - | 2 | v0.2 | Tüm değişkenler tek tek analiz edildi (19 dosya, 40+ değişken grubu) |
 | 01-03-2026 | - | 2 | v0.3 | Feature engineering script'i yazıldı (02_feature_engineering.py) |
 | 02-03-2026 | - | 3 | v0.4 | Değişken korelasyon metodolojisi ve 3'lü AI denetim sistemi kuruldu |
-| | | | | |
+| 07-03-2026 | - | 4 | v0.5 | Tüm korelasyon analizleri (8/8) ve değişken klasörleri (11/11) tamamlandı, KORELASYON_KULLANIM_RAPORU.md güncellendi, baseline model için hazır |
+| 07-03-2026 | 14:50 | 5 | v0.6 | İleri seviye feature engineering: bağlamsal dinlenme, FTr context, konferans turnuvası momentumu, tur bağlamı, Bayesian smoothing, kod temizliği |
+| 07-03-2026 | 18:20 | 6 | v0.7 | Korelasyon raporundan sadece uygulanan kararlar progress'e işlendi; konferans turnuvası + tur bağlamı aktif doğrulandı, zayıf değişken temizliği tamamlandı |
 
 **Format:** GG-AA-YYYY | HH:MM | Oturum No | vX.X | Kısa açıklama
+
+---
+
+## Korelasyon Raporundan Islenenler (Sadece Uygulananlar)
+
+Bu bolumde sadece kodda aktif olan ve veri uretiminde dogrulanan kararlar tutulur.
+
+### Aktif ve Uygulanan Cekirdekler
+
+| Alan | Durum | Not |
+|------|-------|-----|
+| Home court normalizasyonu | Uygulandi | TrueMargin hesaplamasinda 5.73 sabiti kullaniliyor |
+| Four Factors guvenli calisma | Uygulandi | Eksik kolon varsa Four Factors kapanip compact akisa geciliyor |
+| Baglamsal FTr | Uygulandi | `FTr_vs_OppAllowed_diff` aktif, Women tarafinda klasik `FTr_diff` devre disi |
+| Rest/Fatigue baglami | Uygulandi | `DaysSinceLastGame`, `GamesLast7Days`, `GamesLast14Days`, `B2B_Last14Days` aktif |
+| Konferans gucu | Uygulandi | `ConfStrength`, `ConfWinPct`, `ConfBidCount`, `ConfTeamCount` aktif |
+| Konferans turnuvasi context | Uygulandi | `ConfTourneyGamesPlayed`, `ConfTourneyWinPct`, `ConfTourneyChampion`, `DaysSinceConfFinal` aktif |
+| Tur baglami (round context) | Uygulandi | `Round_Num`, `Is_FirstWeekend`, `Is_SecondWeekend`, `Is_FinalWeekend` aktif |
+| Close game smoothing | Uygulandi | `CloseWinPct` Bayesian smoothing ile hesaplaniyor, `CloseGamesCount_diff` aktif |
+
+### Bilerek Cikarilan/Zayif Bulunanlar
+
+| Degisken | Karar | Gerekce |
+|----------|-------|---------|
+| `EloScore` | Cikarildi | Bu pipeline icinde tutarli ek veri kaynagi yoktu |
+| `Upset_Zone` | Cikarildi | Simetrik veri yapisinda lineer sinyal vermedi |
+| `Rank_Agreement` | Cikarildi | Ek bilgi katmadi, gürültü urettigi goruldu |
+| `CoachChangedThisSeason` | Cikarildi | Nadir ve zayif sinyal |
+
+### Son Uretim Durumu (Dogrulandi)
+
+| Cikti | Durum |
+|------|-------|
+| `processed_features_men.csv` | Guncel ve uretildi (62 sutun) |
+| `processed_features_women.csv` | Guncel ve uretildi (57 sutun) |
+| Eksik deger kontrolu | Geciyor (kritik merge boslugu yok) |
+| Target dengesi | 0.5 / 0.5 korunuyor |
 
 ---
 
@@ -132,8 +171,32 @@ Bu kurallar analiz ve modelleme sürecinde **KESİNLİKLE** uyulması gereken te
 | **MCP sunucuları kurulumu** | ✅ Tamamlandı | GitHub MCP eklendi (restart gerekli) |
 | **Environment kurulumu** | ✅ Tamamlandı | Virtual environment mevcut |
 | **Oturum rapor sistemi** | ✅ Tamamlandı | session_start.md, session_end.md, günlük klasörler |
-| **Değişkenlerin tek tek analizi** | ✅ Tamamlandı | 19 dosya, 40+ değişken grubu detaylı analiz edildi |
+| **Değişkenlerin tek tek analizi** | ✅ Tamamlandı | 11 klasör, 40+ değişken grubu detaylı analiz edildi |
 | **Feature engineering script'i** | ✅ Tamamlandı | 02_feature_engineering.py ile SeedDiff, MasseyRankDiff, WinPctDiff, PointDiffDiff feature'ları üretildi |
+| **Korelasyon analizleri (8/8)** | ✅ Tamamlandı | Tüm korelasyon dosyaları incelendi, kararlar alındı |
+| **KORELASYON_KULLANIM_RAPORU.md** | ✅ Tamamlandı | Tüm kararlar ve test planları belgelendi |
+| **İleri seviye feature engineering (v0.6)** | ✅ Tamamlandı | Aşağıda detaylar |
+
+**v0.6 – İleri Seviye Feature Engineering Detayları:**
+
+| Yeni Feature / Değişiklik | Açıklama |
+|---------------------------|----------|
+| `FTr_vs_OppAllowed_diff` | Bağlamsal serbest atış oranı: Kendi FTr – Rakibin izin verdiği FTr |
+| `DaysSinceLastGame` | Kontekst bazlı dinlenme süresi (eski RestDays'in yerini aldı) |
+| `GamesLast7Days / GamesLast14Days` | Son 7/14 gündeki maç yükü (yorgunluk birikimi) |
+| `B2B_Last14Days` | Son 14 gündeki arka arkaya (B2B) maç sayısı |
+| `ConfTourneyGamesPlayed` | Konferans turnuvasında kaç maç oynandı (Champ Week yorgunluğu) |
+| `ConfTourneyWinPct` | Konf. turnuvası kazanma oranı (son form göstergesi) |
+| `ConfTourneyChampion` | Konferans şampiyonu bayrak (Auto-Bid alan takımlar) |
+| `DaysSinceConfFinal` | Konf. finalinden NCAA Turnuvasına kaç gün (dinlenme süresi) |
+| `Round_Num` | Turnuva tur numarası (1-6 arası, bracket bağlamı) |
+| `Is_FirstWeekend / Is_SecondWeekend / Is_FinalWeekend` | Tur bayrakları – hangi hafta sonu |
+| `CloseWinPct` → Bayesian Smoothing | Az örnekli takımlar için Beta prior (α=2, β=2) eklendi |
+| `CloseGamesCount_diff` | Yakın maç sayısı farkı (sinyal güvenilirliği) |
+| **Kaldırılan:** `CoachChangedThisSeason` | Zayıf sinyal, gürültü kaynağıydı |
+| **Kaldırılan:** `Upset_Zone` | Simetrik veri setinde Pearson=0, modele katkı yok |
+| **Kaldırılan:** `Rank_Agreement` | Seed ve Massey zaten ayrı sinyal veriyor, fazlalıktı |
+| **Women özel:** `FTr_diff` kaldırıldı | Kadınlarda zayıf sinyal; bağlamsal `FTr_vs_OppAllowed_diff` korundu |
 
 **Değişken Analizi Detayları:**
 - `değişkenlerin tek tek analizi/` klasöründe 19 analiz dosyası
@@ -148,14 +211,11 @@ Bu kurallar analiz ve modelleme sürecinde **KESİNLİKLE** uyulması gereken te
 
 | Görev | Öncelik | Notlar |
 |-------|---------|--------|
-| **Korelasyon analizi (Tüm Değişkenler Tablosu)** | 🔴 Yüksek | `tüm degiskenler tablo` adlı dosyada listelenen 60-70 adet değişkenin, yeni 3'lü AI doğrulama ve turnuva verisi kurallarına göre tek tek hesaplanması. |
-| **Kalan Değişkenlerin Onayı** | 🔴 Yüksek | 04, 05, 06 ve 07 numaralı dosyalar şu an sadece prototip olarak kuruldu. 1, 2 ve 3 numaralı dosyalarda yapılan "Kesin Matematiksel Doğrulama" işlemi henüz bunlara uygulanmadı. Sırayla teyit edilecekler. |
-| **Yüzdesel Analizlerin Güncellenmesi** | 🔴 Yüksek | Her biten değişken dosyasının özetinin `08_yuzdesel_analizler.txt` dosyasına eklenmesi işlemine devam edilecek. |
-| **Baseline model oluştur** | 🟡 Orta | Logistic Regression ile başlangıç modeli |
-| **Model eğitimi ve değerlendirme** | 🟡 Orta | Brier Score ile performans ölçümü |
-| **Model geliştirme (XGBoost/LightGBM)** | 🟡 Orta | Gelişmiş modelleri dene |
-| **Hyperparameter tuning** | 🟡 Orta | GridSearch / Optuna ile optimizasyon |
-| **Cross-validation stratejisi** | 🟡 Orta | Time-series split ile sezon bazlı CV |
+| **Korelasyon dosyaları analizi (4. dosyadan devam)** | 🔴 Yüksek | 04_wloc_analizi.txt'den başlayacak (5,6,7,8 kaldı) |
+| **Baseline model oluştur** | 🔴 Yüksek | LightGBM ile başlangıç modeli (03_lgbm_train.py) |
+| **Model eğitimi ve değerlendirme** | 🔴 Yüksek | Brier Score ile performans ölçümü |
+| **StdOrdinalRank testi** | 🟡 Orta | Baseline sonrası ekle, Brier Score > 0.001 improvement kontrol et |
+| **Hyperparameter tuning** | 🟡 Orta | Optuna ile optimizasyon |
 | **Probability calibration** | 🟡 Orta | Brier Score için olasılık kalibrasyonu |
 | **Final submission** | 🟢 Düşük | Kaggle'a dosya yükle |
 
@@ -163,9 +223,7 @@ Bu kurallar analiz ve modelleme sürecinde **KESİNLİKLE** uyulması gereken te
 
 | Görev | Sebep |
 |-------|-------|
-| 04, 05, 06 ve 07 Dosyaları Teyidi | Henüz prototip halindeler, sıradaki adım olarak 3'lü AI denetiminden geçecekler. |
-| Tüm Değişkenlerin Analizi | Şu an sadece ilk 3 dosya bitti. Tablodaki 60-70 değişken için bu süreç devam edecek. |
-| Model Eğitimi | Değişken testleri ve Feature Engineering süreci kusursuzlaşmadan model kurmak hatalı olur. |
+| Model Eğitimi | Analiz fazı tamamlandı, eğitim aşamasına geçiliyor. |
 
 ---
 
@@ -199,33 +257,44 @@ Bu kurallar analiz ve modelleme sürecinde **KESİNLİKLE** uyulması gereken te
 
 ---
 
-## Özellik Mühendisliği Planı
+## Özellik Mühendisliği – Doğrulanmış Korelasyonlar (v0.6)
 
-### 🔴 En Önemli Feature'lar (Analiz Sonucu)
+### 🔴 1. Sınıf Sinyaller (|corr| ≥ 0.40)
 
-| Feature | Kaynak | Formül | Korelasyon |
-|---------|--------|--------|------------|
-| **SeedDiff** | Seed | Seed_A - Seed_B | +0.85 |
-| **MasseyRankDiff** | Massey | Rank_B - Rank_A (TERS!) | +0.78 |
-| **WinPctDiff** | Results | Win%_A - Win%_B | +0.70 |
-| **PointDiffDiff** | Results | AvgPtDiff_A - AvgPtDiff_B | +0.72 |
+| Feature | Men Corr | Women Corr | Kaynak |
+|---------|----------|------------|--------|
+| `SeedNum_diff` | -0.482 | -0.624 | Seed parse + diff |
+| `NetRtg_diff` | 0.401 | 0.473 | Four Factors / efficiency |
+| `TrueMarginAvg_diff` | 0.375 | 0.472 | Nötrleştirilmiş sayı farkı |
+| `AvgScore_diff` | 0.232 | 0.437 | Ort. atılan sayı |
+| `Heavy_Favorite` | 0.341 | 0.411 | SeedNum_diff ≤ -8 bayrak |
+| `ConfBidCount_diff` | — | 0.425 | Konferans NCAA bid sayısı |
+| `ConfStrength_diff` | — | 0.405 | Konferans gücü |
 
-**Four Factors (Dean Oliver):**
-- **eFG%Diff** (Shooting) - %40 ağırlık 🔴
-- **TO%Diff** (Turnovers) - %25 ağırlık 🔴
-- **ORB%Diff** (Rebounding) - %20 ağırlık 🟡
-- **FTRateDiff** (Fouling) - %15 ağırlık 🟢
+### 🟡 2. Sınıf Sinyaller (0.25 ≤ |corr| < 0.40)
 
-### Temel Özellikler
+| Feature | Men Corr | Women Corr |
+|---------|----------|------------|
+| `WinPct_diff` | 0.326 | 0.369 |
+| `eFG_diff` | 0.170 | 0.355 |
+| `Margin_last21_diff` | 0.245 | 0.350 |
+| `BlkPct_diff` | 0.203 | 0.330 |
+| `ORBpct_diff` | 0.209 | 0.323 |
+| `MasseyPct_diff` | 0.449 | — (yok) |
+
+### Four Factors (Dean Oliver)
+- **eFG%Diff** (Shooting) – En güçlü Four Factor 🔴
+- **TOVpct_diff** (Turnovers) – Ters korelasyonlu 🔴
+- **ORBpct_diff** (Rebounding) – Orta seviye sinyal 🟡
+- **FTr_vs_OppAllowed_diff** (Bağlamsal FTr) – Women için özellikle güçlendirilmiş 🟢
+
+### Bağlamsal Feature'lar (v0.6 – YENİ)
 
 | Kategori | Özellikler |
 |----------|------------|
-| **Takım Gücü** | Massey Ordinals ortalaması, sıralama farkı, trend |
-| **Regular Season** | Win-Loss record, point differential, Son 10 maç |
-| **İstatistikler** | Offensive/Defensive efficiency, 3P%, FT%, rebound rate |
-| **Turnuva** | Seed numarası, geçmiş turnuva performansı |
-| **Konferans** | Konferans gücü, konferans içi performans |
-| **Diğer** | Rest days, travel distance (veri varsa) |
+| **Konf. Turnuvası** | ConfTourneyGamesPlayed, ConfTourneyWinPct, ConfTourneyChampion, DaysSinceConfFinal |
+| **Tur Bağlamı** | Round_Num, Is_FirstWeekend, Is_SecondWeekend, Is_FinalWeekend |
+| **Dinlenme** | DaysSinceLastGame, GamesLast7Days, GamesLast14Days, B2B_Last14Days |
 
 ### Data Leakage Önlemleri
 
@@ -350,45 +419,34 @@ feat: 26-02-2026 veri yükleme sistemi
 
 ```
 yarismatahmin/
-├── session_start.md              # Oturum başı şablonu
-├── session_end.md                # Oturum sonu şablonu
-├── brainstorm_report.md          # Beyin fırtınası raporu
-├── kaggle_akis_plani.md          # Kaggle yarışması akış planı
-├── .env                          # Environment variables
-├── .mcp.json                     # MCP sunucu ayarları
-├── .claude/
-│   └── settings.local.json       # Claude ayarları
 ├── csv dosyaları analiz/
 │   └── progress.md               # Ana progress takibi
-├── değişkenlerin tek tek analizi/  # Değişken analizleri (YENİ!)
-│   ├── season/                   # Season analizi
-│   ├── daynum/                   # DayNum analizi
-│   ├── teamid/                   # TeamID analizi
-│   ├── results/                  # Results, WLoc, NumOT
-│   ├── seed/                     # Seed analizi
-│   ├── massey/                   # Massey Ordinals analizi
-│   ├── konferans/                # Konferans analizi
-│   ├── stats/                    # Shooting, Rebounding, etc.
-│   ├── metadata/                 # Team info, locations, coaches
-│   └── FINAL_OZET.md             # Tüm değişkenler özeti
-├── 26-02-2026/                   # Günlük klasör (GG-AA-YYYY)
-│   └── gunluk_rapor.md           # Günlük rapor
-├── src/                          # Kaynak kodlar
-├── notebooks/                    # Jupyter notebook'lar
+├── korelasyonlar/                 # Ham korelasyon analiz dosyaları
+├── mania_pipeline/
+│   ├── scripts/
+│   │   ├── 02_feature_engineering.py   # Ana feature pipeline
+│   │   ├── 03_lgbm_train.py            # Model eğitim scripti (taslak)
+│   │   └── analyze_weak_features.py    # Zayıf feature analiz aracı
+│   ├── artifacts/data/
+│   │   ├── processed_features_men.csv   # Erkek feature matrisi
+│   │   └── processed_features_women.csv # Kadın feature matrisi
+│   └── KORELASYON_KULLANIM_RAPORU.md
+├── march-machine-leraning-mania-2026/  # Ham CSV veri seti
 ├── venv/                         # Virtual environment
-└── march-machine-leraning-mania-2026/  # Veri seti
+└── .gitignore
 ```
 
 ---
 
 ## Sonraki Adımlar
 
-1. **✅ DEĞİŞKEN ANALİZİ PROTOTİPLERİ** - Tüm 40+ değişken grubu yüzeysel olarak analiz edildi.
-2. **✅ KUSURSUZ DOĞRULAMA (Faz 1)** - İlk 3 Değişken dosyası (RestDays, RestDaysDiff, WScore/LScore) 3'lü AI sistemi ile Turnuva verisi üzerinden kusursuzlaştırıldı ve özet dosyasına aktarıldı.
-3. **Kalan Dosyaların Teyidi** - Prototip halindeki 04, 05, 06 ve 07 numaralı dosyaların testten geçirilmesi.
-4. **Yeni Feature Taraması** - `tüm degiskenler tablo` dosyasındaki 60-70 değişkenin sırayla bu sisteme sokulması.
-5. **Model ve Optimizasyon** - Tüm özellikler (feature) elendikten ve onaylandıktan sonra XGBoost vb. ile Brier skor hedefine yöneliş.
+1. **✅ DEĞİŞKEN ANALİZİ (TAMAMLANDI)** - Tüm 40+ değişken grubu ve 8 korelasyon dosyası analiz edildi.
+2. **✅ KUSURSUZ DOĞRULAMA (TAMAMLANDI)** - Tüm korelasyon ve değişken analizleri Turnuva verisi üzerinden doğrulandı.
+3. **✅ İLERİ SEVİYE FEATURE ENGINEERING (v0.6)** - Bağlamsal dinlenme, FTr context, konf. turnuvası, tur bağlamı, Bayesian smoothing.
+4. **⏳ BASELINE MODEL KURULUMU** - LightGBM ile ilk model eğitimi (03_lgbm_train.py).
+5. **Model Optimizasyonu** - Hyperparameter tuning ve probability calibration.
+6. **Kaggle Submission** - Stage 1 için submission dosyası üretme.
 
 ---
 
-*Son Güncelleme: 02-03-2026*
+*Son Güncelleme: 07-03-2026*
