@@ -10,8 +10,8 @@ warnings.filterwarnings("ignore")
 # CONFIG
 # ─────────────────────────────────────────────────────────
 
-DATA_DIR = "../mania_pipeline/data/raw"
-OUT_DIR  = "data"
+DATA_DIR = "march-machine-leraning-mania-2026"
+OUT_DIR  = "mania_pipeline/artifacts/data"
 
 MIN_SEASON_MEN = 2003
 MIN_SEASON_WOMEN = 2010
@@ -20,7 +20,23 @@ MIN_SEASON_WOMEN = 2010
 ELITE_MASSEY_SYSTEMS = ["POM", "SAG", "NET", "BPI", "MOR", "KPI"]
 
 # Rolling pencereler
-ROLLING_WINDOWS = [7, 14, 21]
+ROLLING_WINDOWS = [7, 10, 14, 21]
+
+# Close-game tanimi ve Bayesian smoothing parametreleri
+CLOSE_GAME_MARGIN = 5
+CLOSE_PRIOR_ALPHA = 2.0
+CLOSE_PRIOR_BETA = 2.0
+
+# Four Factors icin gerekli boxscore kolonlari (raw detailed dosyasi)
+REQUIRED_BOXSCORE_COLUMNS = [
+    "WFGM","WFGA","WFGM3","WFGA3","WFTM","WFTA",
+    "WOR","WDR","WAst","WTO","WStl","WBlk","WPF",
+    "LFGM","LFGA","LFGM3","LFGA3","LFTM","LFTA",
+    "LOR","LDR","LAst","LTO","LStl","LBlk","LPF"
+]
+
+# compute_four_factors calismasi icin games_long uzerinde gereken kolonlar
+REQUIRED_FOUR_FACTOR_COLUMNS = ["FGA", "OR", "TO", "FTA", "FGM", "FGM3", "OppDR", "Stl", "Blk"]
 
 # Ev Sahibi Normalizasyon Sabiti (04_wloc_analizi.txt'den)
 HOME_COURT_ADVANTAGE = 5.73
@@ -52,6 +68,13 @@ def load(filename):
     return df
 
 
+def get_missing_columns(df, required_cols):
+    """DataFrame icinde eksik zorunlu kolonlari listele."""
+    if df is None:
+        return list(required_cols)
+    return [c for c in required_cols if c not in df.columns]
+
+
 def parse_seed(s):
     """'W01', 'X16a', 'Y11b' → integer seed numarası"""
     m = re.search(r"\d+", str(s))
@@ -65,7 +88,7 @@ def make_games_long(df, has_boxscore=False):
     """
     df = df.reset_index(drop=True)
     base_cols = ["Season", "DayNum", "WTeamID", "LTeamID",
-                 "WScore", "LScore", "WLoc"]
+                 "WScore", "LScore", "WLoc", "NumOT"]
 
     w = df[base_cols].copy()
     w["TeamID"]    = w["WTeamID"]
@@ -96,12 +119,17 @@ def make_games_long(df, has_boxscore=False):
     keep = ["Season", "DayNum", "TeamID", "OppID", "Win",
             "Score", "OppScore", "IsHome", "TrueMargin"]
 
+    if "NumOT" in df.columns:
+        w["NumOT"] = df["NumOT"]
+        l["NumOT"] = df["NumOT"]
+        w["WentOT"] = (w["NumOT"] > 0).astype(int)
+        l["WentOT"] = (l["NumOT"] > 0).astype(int)
+        w["IsMultiOT"] = (w["NumOT"] >= 2).astype(int)
+        l["IsMultiOT"] = (l["NumOT"] >= 2).astype(int)
+        keep += ["NumOT", "WentOT", "IsMultiOT"]
+
     if has_boxscore:
-        box_w = ["WFGM","WFGA","WFGM3","WFGA3","WFTM","WFTA",
-                 "WOR","WDR","WAst","WTO","WStl","WBlk","WPF",
-                 "LFGM","LFGA","LFGM3","LFGA3","LFTM","LFTA",
-                 "LOR","LDR","LAst","LTO","LStl","LBlk","LPF"]
-        if all(c in df.columns for c in box_w):
+        if all(c in df.columns for c in REQUIRED_BOXSCORE_COLUMNS):
             for g in [w, l]:
                 side  = "W" if g is w else "L"
                 oside = "L" if g is w else "W"
@@ -120,6 +148,7 @@ def make_games_long(df, has_boxscore=False):
     return result
 
 
+
 def compute_four_factors(gl):
     """
     games_long üzerinden Dean Oliver's Four Factors hesapla.
@@ -134,10 +163,19 @@ def compute_four_factors(gl):
     gl["ORBpct"] = gl["OR"] / (gl["OR"] + gl["OppDR"]).clip(lower=1)
     gl["FTr"]    = gl["FTA"] / gl["FGA"].clip(lower=1)
     
+    # Contextual FTr: Kendi atma oranın - Rakibin savunmada izin verdiği FTr
+    # Oyundaki rakibi (Opp) ele alıyoruz
+    gl["OppFTr"] = gl["OppFTA"] / gl["OppFGA"].clip(lower=1)
+    gl["FTr_vs_OppAllowed"] = gl["FTr"] - gl["OppFTr"]
+    
     # Efficiency (100 Poss. başına sayı)
     gl["OffRtg"] = gl["Score"]    / gl["Poss"] * 100
     gl["DefRtg"] = gl["OppScore"] / gl["Poss"] * 100
     gl["NetRtg"] = gl["OffRtg"] - gl["DefRtg"]
+    
+    # Defensive Stats as % of Possessions
+    gl["StlPct"] = gl["Stl"] / gl["Poss"].clip(lower=1)
+    gl["BlkPct"] = gl["Blk"] / gl["Poss"].clip(lower=1)
     
     return gl
 
@@ -161,6 +199,31 @@ def build_season_aggregates(gl, has_ff=False):
         Games         = ("Win",       "count"),
     ).reset_index()
 
+    # Overtime profili (tempo/volatilite sinyali)
+    if {"NumOT", "WentOT", "IsMultiOT"}.issubset(gl_copy.columns):
+        ot_agg = gl_copy.groupby(["Season", "TeamID"]).agg(
+            OTRate = ("WentOT", "mean"),
+            AvgOT = ("NumOT", "mean"),
+            MultiOTRate = ("IsMultiOT", "mean"),
+        ).reset_index()
+        agg = agg.merge(ot_agg, on=["Season", "TeamID"], how="left")
+
+    # Close-game kazanma orani: az ornekli takimlar icin Bayesian smoothing uygula
+    gl_copy["IsClose"] = (gl_copy["TrueMargin"].abs() <= CLOSE_GAME_MARGIN).astype(int)
+    gl_copy["CloseWin"] = ((gl_copy["IsClose"] == 1) & (gl_copy["Win"] == 1)).astype(int)
+    
+    close_agg = gl_copy.groupby(["Season","TeamID"]).agg(
+        CloseWins = ("CloseWin", "sum"),
+        CloseGamesCount = ("IsClose", "sum"),
+    ).reset_index()
+    close_agg["CloseWinPct"] = (
+        close_agg["CloseWins"] + CLOSE_PRIOR_ALPHA
+    ) / (
+        close_agg["CloseGamesCount"] + CLOSE_PRIOR_ALPHA + CLOSE_PRIOR_BETA
+    )
+    close_agg = close_agg[["Season", "TeamID", "CloseWinPct", "CloseGamesCount"]]
+    agg = agg.merge(close_agg, on=["Season","TeamID"], how="left")
+
     if has_ff and "NetRtg" in gl.columns:
         ff_agg = gl.groupby(["Season","TeamID"]).agg(
             NetRtg  = ("NetRtg",  "mean"),
@@ -168,6 +231,9 @@ def build_season_aggregates(gl, has_ff=False):
             TOVpct  = ("TOVpct",  "mean"),
             ORBpct  = ("ORBpct",  "mean"),
             FTr     = ("FTr",     "mean"),
+            FTr_vs_OppAllowed = ("FTr_vs_OppAllowed", "mean"),
+            StlPct  = ("StlPct",  "mean"),
+            BlkPct  = ("BlkPct",  "mean"),
         ).reset_index()
         agg = agg.merge(ff_agg, on=["Season","TeamID"], how="left")
 
@@ -203,35 +269,67 @@ def build_rolling_features(gl, windows=ROLLING_WINDOWS):
 def build_rest_days(gl):
     """
     Her takım için bir önceki maçtan bu yana geçen gün sayısı ve paslanma/yorgunluk flagleri.
-    01_season_daynum_restdays.txt kural setinden çekilmiştir.
+    Bağlamsal özelliklerle: DaysSinceLastGame, GamesLast7Days, GamesLast14Days, vb.
     """
     gl = gl.sort_values(["TeamID","Season","DayNum"]).copy()
+    
+    # DaysSinceLastGame (önceki maç ile gün farkı)
     gl["PrevDayNum"] = gl.groupby(["TeamID","Season"])["DayNum"].shift(1)
-    gl["RestDays"]   = (gl["DayNum"] - gl["PrevDayNum"]).clip(lower=0)
+    gl["DaysSinceLastGame"] = (gl["DayNum"] - gl["PrevDayNum"]).clip(lower=0)
     
-    # Fatigue interaction flags
-    gl["Is_Rusty"] = (gl["RestDays"] >= 7).astype(int) # Over-rested penalty
-    gl["Is_Back_To_Back"] = (gl["RestDays"] <= 2).astype(int) # High fatigue penalty
+    # Kendi kendine B2B_flag hesapla (eğer 2 veya daha az gün ise)
+    gl["Is_B2B_Game"] = (gl["DaysSinceLastGame"] <= 2).astype(int)
     
-    return gl[["Season","DayNum","TeamID","RestDays", "Is_Rusty", "Is_Back_To_Back"]]
+    # GamesLast7Days ve GamesLast14Days için kendi takımı bazında geriye dönük rolling count
+    # Veriler TeamID ve Season'a sıralı. Rolling hesaplarken her maçın oynandığı 'DayNum'
+    # değerine göre geçmiş 7 veya 14 güne bakarız.
+    
+    # Daha iyi bir yaklaşım: Geriye dönük sorgu
+    def count_recent_games(df_team, days=14):
+        # DayNum array'ini al
+        day_nums = df_team["DayNum"].values
+        counts = np.zeros(len(day_nums))
+        b2b_counts = np.zeros(len(day_nums))
+        
+        is_b2b = df_team["Is_B2B_Game"].values
+        
+        for i, d in enumerate(day_nums):
+            # i'nci maça kadar olan geçmiş maçlardan (kendisinden öncekiler)
+            # son `days` gün içindekileri say
+            valid_idx = np.where((day_nums[:i] > d - days) & (day_nums[:i] <= d))[0]
+            counts[i] = len(valid_idx)
+            # Bu filtrede B2B olanları da ayrı say (yorgunluk birikimi = B2B_LastXDays)
+            b2b_counts[i] = is_b2b[valid_idx].sum()
+            
+        return pd.DataFrame({"GamesLastX": counts, "B2B_LastX": b2b_counts}, index=df_team.index)
 
-def build_custom_elo(gl):
-    """
-    Basit Custom ELO Puanlamasi (K=20, HomeAdv=5.73)
-    Ozellikle Women's verisinde Massey olmadigi icin kritik.
-    Time leakage önlemek için Day 0'da başlatılır, adım adım güncellenir.
-    Sadece son durum tablosu döner.
-    """
-    # TODO: Vektorize edilecek. iterrows cok yavas calisiyor.
-    # Simdilik tum takimlara default 1500 ELO score verip kisa devre yapiyoruz.
-    unique_teams = gl[["Season", "TeamID"]].drop_duplicates()
-    unique_teams["EloScore"] = 1500
-    return unique_teams
+    # df'yi apply etmesi pahali olabilir, list comprehension ile daha hizli:
+    t_groups = []
+    for (team_id, season), df_team in gl.groupby(["TeamID", "Season"]):
+        day_nums = df_team["DayNum"].values
+        is_b2b = df_team["Is_B2B_Game"].values
+        
+        counts_7, counts_14, b2b_14 = [], [], []
+        for i, d in enumerate(day_nums):
+            valid_14 = (day_nums[:i] > d - 14) & (day_nums[:i] <= d)
+            valid_7 = (day_nums[:i] > d - 7) & (day_nums[:i] <= d)
+            counts_14.append(valid_14.sum())
+            counts_7.append(valid_7.sum())
+            b2b_14.append(is_b2b[:i][valid_14].sum() if len(valid_14)>0 else 0)
+            
+        df_team = df_team.copy()
+        df_team["GamesLast7Days"] = counts_7
+        df_team["GamesLast14Days"] = counts_14
+        df_team["B2B_Last14Days"] = b2b_14
+        t_groups.append(df_team)
+        
+    gl = pd.concat(t_groups)
+    
+    return gl[["Season","DayNum","TeamID","DaysSinceLastGame", "GamesLast7Days", "GamesLast14Days", "B2B_Last14Days"]]
 
 def build_massey_features(massey_df, systems=ELITE_MASSEY_SYSTEMS):
     """
     Massey: SADECE elite sistemler, RankingDayNum=133 snapshot.
-    rank_percentile = 1 - (rank-1)/(N-1) → yüksek = daha iyi takım.
     (Kadınlar veri setinde pas geçilecek).
     """
     snap = massey_df[massey_df["RankingDayNum"] == 133].copy()
@@ -274,12 +372,244 @@ def build_seed_features(seeds_df):
     df["SeedNum"] = df["Seed"].apply(parse_seed)
     return df[["Season","TeamID","SeedNum"]]
 
+def build_conference_features(team_base, conf_df, seed_feats):
+    """
+    Konferans bazli strength/depth feature'lari.
+    Leave-one-out ortalama kullanilir: takimin kendi degeri konferans ortalamasindan cikarilir.
+    """
+    required = {"Season", "TeamID", "ConfAbbrev"}
+    if conf_df is None or not required.issubset(conf_df.columns):
+        return pd.DataFrame(columns=["Season", "TeamID", "ConfStrength", "ConfWinPct", "ConfTeamCount", "ConfBidCount"])
+
+    conf = conf_df[["Season", "TeamID", "ConfAbbrev"]].drop_duplicates()
+
+    metric_candidates = ["TrueMarginAvg", "WinPct", "NetRtg"]
+    metric_cols = [c for c in metric_candidates if c in team_base.columns]
+    if not metric_cols:
+        return pd.DataFrame(columns=["Season", "TeamID", "ConfStrength", "ConfWinPct", "ConfTeamCount", "ConfBidCount"])
+
+    conf_team = team_base[["Season", "TeamID"] + metric_cols].merge(
+        conf, on=["Season", "TeamID"], how="left"
+    )
+    conf_team = conf_team.dropna(subset=["ConfAbbrev"]).copy()
+
+    grp_keys = ["Season", "ConfAbbrev"]
+    conf_team["ConfTeamCount"] = conf_team.groupby(grp_keys)["TeamID"].transform("count")
+
+    if "NetRtg" in conf_team.columns:
+        source_strength = "NetRtg"
+    else:
+        source_strength = "TrueMarginAvg"
+
+    for metric in [source_strength, "WinPct"]:
+        if metric not in conf_team.columns:
+            continue
+        gsum = conf_team.groupby(grp_keys)[metric].transform("sum")
+        gcnt = conf_team["ConfTeamCount"]
+        season_mean = conf_team.groupby("Season")[metric].transform("mean")
+        loo_mean = np.where(gcnt > 1, (gsum - conf_team[metric]) / (gcnt - 1), season_mean)
+        conf_team[f"Conf_{metric}_LOO"] = loo_mean
+
+    # Konferansin o sezon turnuvaya kac takim soktugu
+    seed_conf = seed_feats.merge(conf, on=["Season", "TeamID"], how="left")
+    bid_counts = (
+        seed_conf.dropna(subset=["ConfAbbrev"])
+        .groupby(grp_keys)["TeamID"]
+        .nunique()
+        .rename("ConfBidCount")
+        .reset_index()
+    )
+    conf_team = conf_team.merge(bid_counts, on=grp_keys, how="left")
+    conf_team["ConfBidCount"] = conf_team["ConfBidCount"].fillna(0)
+
+    if "Conf_NetRtg_LOO" in conf_team.columns:
+        conf_team["ConfStrength"] = conf_team["Conf_NetRtg_LOO"]
+    else:
+        conf_team["ConfStrength"] = conf_team["Conf_TrueMarginAvg_LOO"]
+    conf_team["ConfWinPct"] = conf_team.get("Conf_WinPct_LOO", 0.5)
+
+    return conf_team[["Season", "TeamID", "ConfStrength", "ConfWinPct", "ConfTeamCount", "ConfBidCount"]]
+
+def build_coach_features(coaches_df):
+    """
+    Coach tenure feature'i.
+    Yalnizca turnuva oncesi snapshot (FirstDayNum < 134) dikkate alinir.
+    """
+    required = {"Season", "TeamID", "FirstDayNum", "LastDayNum", "CoachName"}
+    if coaches_df is None or not required.issubset(coaches_df.columns):
+        return pd.DataFrame(columns=["Season", "TeamID", "CoachTenureYears"])
+
+    df = coaches_df[list(required)].dropna(subset=["CoachName"]).copy()
+    df = df[df["FirstDayNum"] < 134].copy()
+    if df.empty:
+        return pd.DataFrame(columns=["Season", "TeamID", "CoachTenureYears"])
+
+    latest = (
+        df.sort_values(["Season", "TeamID", "LastDayNum", "FirstDayNum"])
+        .drop_duplicates(subset=["Season", "TeamID"], keep="last")
+        .loc[:, ["Season", "TeamID", "CoachName"]]
+        .rename(columns={"CoachName": "CurrentCoach"})
+    )
+
+    latest = latest.sort_values(["TeamID", "Season"]).reset_index(drop=True)
+    latest["CoachTenureYears"] = 1
+    for team_id, idx in latest.groupby("TeamID").groups.items():
+        idx_list = list(idx)
+        tenure = []
+        prev_coach = None
+        prev_tenure = 0
+        for i in idx_list:
+            coach = latest.at[i, "CurrentCoach"]
+            if coach == prev_coach:
+                prev_tenure += 1
+            else:
+                prev_tenure = 1
+            tenure.append(prev_tenure)
+            prev_coach = coach
+        latest.loc[idx_list, "CoachTenureYears"] = tenure
+
+    return latest[["Season", "TeamID", "CoachTenureYears"]]
+
+def build_program_features(team_base, teams_df):
+    """
+    Program age: takimin D1 tecrubesi.
+    """
+    required = {"TeamID", "FirstD1Season"}
+    if teams_df is None or not required.issubset(teams_df.columns):
+        return pd.DataFrame(columns=["Season", "TeamID", "ProgramAge"])
+
+    base = team_base[["Season", "TeamID"]].drop_duplicates().merge(
+        teams_df[["TeamID", "FirstD1Season"]], on="TeamID", how="left"
+    )
+    base["ProgramAge"] = (base["Season"] - base["FirstD1Season"]).clip(lower=0)
+    base["ProgramAge"] = base["ProgramAge"].fillna(0)
+    return base[["Season", "TeamID", "ProgramAge"]]
+
+def build_conf_tourney_features(conf_tourney_df, ncaa_tourney_df, min_season=None):
+    """
+    Konferans turnuvasi baglami:
+    - kac mac oynadi (yorgunluk)
+    - kazanma orani (guncel form)
+    - konferans sampiyonu mu
+    - konferans finalinden NCAA baslangicina kac gun var
+    """
+    required = {"Season", "ConfAbbrev", "DayNum", "WTeamID", "LTeamID"}
+    if conf_tourney_df is None or not required.issubset(conf_tourney_df.columns):
+        return pd.DataFrame(
+            columns=[
+                "Season",
+                "TeamID",
+                "ConfTourneyGamesPlayed",
+                "ConfTourneyWinPct",
+                "ConfTourneyChampion",
+                "DaysSinceConfFinal",
+            ]
+        )
+
+    ct = conf_tourney_df[list(required)].copy()
+    if min_season is not None:
+        ct = ct[ct["Season"] >= min_season].copy()
+    if ct.empty:
+        return pd.DataFrame(
+            columns=[
+                "Season",
+                "TeamID",
+                "ConfTourneyGamesPlayed",
+                "ConfTourneyWinPct",
+                "ConfTourneyChampion",
+                "DaysSinceConfFinal",
+            ]
+        )
+
+    w = ct[["Season", "ConfAbbrev", "DayNum", "WTeamID"]].rename(columns={"WTeamID": "TeamID"})
+    w["Win"] = 1
+    l = ct[["Season", "ConfAbbrev", "DayNum", "LTeamID"]].rename(columns={"LTeamID": "TeamID"})
+    l["Win"] = 0
+    long_ct = pd.concat([w, l], ignore_index=True)
+
+    agg = long_ct.groupby(["Season", "TeamID"]).agg(
+        ConfTourneyGamesPlayed=("Win", "count"),
+        ConfTourneyWinPct=("Win", "mean"),
+        LastConfTourneyDay=("DayNum", "max"),
+    ).reset_index()
+
+    finals = ct[ct["DayNum"] == ct.groupby(["Season", "ConfAbbrev"])["DayNum"].transform("max")].copy()
+    champions = finals[["Season", "WTeamID"]].drop_duplicates().rename(columns={"WTeamID": "TeamID"})
+    champions["ConfTourneyChampion"] = 1
+    agg = agg.merge(champions, on=["Season", "TeamID"], how="left")
+    agg["ConfTourneyChampion"] = agg["ConfTourneyChampion"].fillna(0).astype(int)
+
+    ncaa_start = ncaa_tourney_df.groupby("Season")["DayNum"].min().rename("NCAAStartDay").reset_index()
+    agg = agg.merge(ncaa_start, on="Season", how="left")
+    agg["DaysSinceConfFinal"] = (agg["NCAAStartDay"] - agg["LastConfTourneyDay"]).clip(lower=0)
+
+    return agg[
+        [
+            "Season",
+            "TeamID",
+            "ConfTourneyGamesPlayed",
+            "ConfTourneyWinPct",
+            "ConfTourneyChampion",
+            "DaysSinceConfFinal",
+        ]
+    ]
+
+def build_round_context_features(df, gender="M", seed_round_slots_df=None):
+    """
+    Match bazli tur baglami.
+    M verisi icin NCAATourneySeedRoundSlots'tan gun->tur eslemesi denenir.
+    Eksik kalanlarda fallback: sezon icindeki DayNum sirasini 1..6 banda mapler.
+    """
+    out = df[["Season", "DayNum"]].copy()
+    out["Round_Num"] = np.nan
+
+    has_seed_round_slots = (
+        seed_round_slots_df is not None
+        and {"GameRound", "EarlyDayNum", "LateDayNum"}.issubset(seed_round_slots_df.columns)
+    )
+    if has_seed_round_slots:
+        srs = seed_round_slots_df[["GameRound", "EarlyDayNum", "LateDayNum"]].copy()
+        early = srs[["GameRound", "EarlyDayNum"]].rename(columns={"EarlyDayNum": "DayNum"})
+        late = srs[["GameRound", "LateDayNum"]].rename(columns={"LateDayNum": "DayNum"})
+        day_round = pd.concat([early, late], ignore_index=True).dropna(subset=["DayNum"])
+        day_round["DayNum"] = day_round["DayNum"].astype(int)
+        # Kaggle dosyasında GameRound=0 (First Four/play-in) bulunabiliyor.
+        # Model tarafında Round_Num'u 1..6 bandında tutmak için 0 değerini 1'e mapliyoruz.
+        day_to_round = day_round.groupby("DayNum")["GameRound"].min().to_dict()
+        day_to_round = {k: max(1, int(v)) for k, v in day_to_round.items()}
+        known_days = sorted(day_to_round.keys())
+
+        if known_days:
+            def map_round(day_num):
+                d = int(day_num)
+                if d in day_to_round:
+                    return int(day_to_round[d])
+                lower = [x for x in known_days if x <= d]
+                if lower:
+                    return int(day_to_round[lower[-1]])
+                return int(day_to_round[known_days[0]])
+
+            out["Round_Num"] = out["DayNum"].map(map_round)
+
+    missing = out["Round_Num"].isna()
+    if missing.any():
+        rank = out.groupby("Season")["DayNum"].rank(method="dense").astype(int)
+        max_rank = out.groupby("Season")["DayNum"].transform("nunique").clip(lower=1)
+        fallback_round = np.ceil((rank / max_rank) * 6).astype(int).clip(1, 6)
+        out.loc[missing, "Round_Num"] = fallback_round[missing]
+
+    out["Round_Num"] = out["Round_Num"].astype(int).clip(1, 6)
+    out["Is_FirstWeekend"] = (out["Round_Num"] <= 2).astype(int)
+    out["Is_SecondWeekend"] = out["Round_Num"].between(3, 4).astype(int)
+    out["Is_FinalWeekend"] = (out["Round_Num"] >= 5).astype(int)
+    return out[["Round_Num", "Is_FirstWeekend", "Is_SecondWeekend", "Is_FinalWeekend"]]
+
 
 # ─────────────────────────────────────────────────────────
 # MATCHUP MATRIX ÜRETİCİ
 # ─────────────────────────────────────────────────────────
 
-def build_matchup_matrix(tourney_df, team_features, gender="M"):
+def build_matchup_matrix(tourney_df, team_features, gender="M", seed_round_slots_df=None):
     """
     Turnuva maçları için matchup diff feature'ları üret.
     TeamA = WTeamID (kazanan), TeamB = LTeamID (kaybeden)
@@ -311,37 +641,81 @@ def build_matchup_matrix(tourney_df, team_features, gender="M"):
         if wc in df.columns and lc in df.columns:
             df[f"{c}_diff"] = df[wc] - df[lc]
 
-    # Massey % 0 ve Seed % 0 uzlaşma (Agreement) flag'i
-    if "W_MasseyAvgRank" in df.columns and "W_SeedNum" in df.columns:
-        # Seedler arasındakı fark ve Massey arasındaki fark aynı yoneyse (Agreement=1)
-        # Örnek: SeedDiff (-4) ve MasseyDiff (-20) -> İki sistem de W'yi çok favori görüyor
-        sign_seed = np.sign(df["SeedNum_diff"])
-        sign_massey = np.sign(df["MasseyAvgRank_diff"])
-        df["Rank_Agreement"] = (sign_seed == sign_massey).astype(int)
-
     diff_cols = [c for c in df.columns if c.endswith("_diff")]
-    if "Rank_Agreement" in df.columns:
-        diff_cols.append("Rank_Agreement")
+    
+    # Women tarafinda klasik FTr_diff zayif; baglamsal versiyonu tutup bunu cikariyoruz.
+    if gender == "W" and "FTr_diff" in diff_cols and "FTr_vs_OppAllowed_diff" in diff_cols:
+        diff_cols.remove("FTr_diff")
 
     # DİKKAT: XGBoost ve LGBM veri setindeki "Target"ın hep 1 (Kazanan) olmasını istemez.
     # O yüzden maçları klonluyoruz ve kaybeden tarafı "TeamA" yaparak Target'ı 0 yapıyoruz.
     df_win  = df.copy(); df_win["Target"]  = 1
     df_win["TeamA"]  = df_win["WTeamID"]
     df_win["TeamB"]  = df_win["LTeamID"]
+    if "W_SeedNum" in df_win.columns and "L_SeedNum" in df_win.columns:
+        df_win["TeamA_SeedNum"] = df_win["W_SeedNum"]
+        df_win["TeamB_SeedNum"] = df_win["L_SeedNum"]
 
     df_loss = df.copy(); df_loss["Target"] = 0
     df_loss["TeamA"]  = df_loss["LTeamID"]
     df_loss["TeamB"]  = df_loss["WTeamID"]
+    if "W_SeedNum" in df_loss.columns and "L_SeedNum" in df_loss.columns:
+        df_loss["TeamA_SeedNum"] = df_loss["L_SeedNum"]
+        df_loss["TeamB_SeedNum"] = df_loss["W_SeedNum"]
     
     # TeamA (Kaybeden) - TeamB (Kazanan) olacağı için diferansiyel işaretleri TERS çevirilir
     for c in diff_cols:
-        if c != "Rank_Agreement":
-            df_loss[c] = -df_loss[c]
+        df_loss[c] = -df_loss[c]
 
     final = pd.concat([df_win, df_loss], ignore_index=True)
+    
+    # Recalculate Logic Flags on the combined dataframe to handle directions correctly
+    # Heavy_Favorite: Current TeamA is much better than TeamB
+    final["Heavy_Favorite"] = (final["SeedNum_diff"] <= -8).astype(int)
+    final["TeamA_Is_Favorite"] = (final["SeedNum_diff"] < 0).astype(int)
+    final["TeamA_Is_Underdog"] = (final["SeedNum_diff"] > 0).astype(int)
+    
+    # Toss_Up: Seeds are very close
+    final["Toss_Up"] = (final["SeedNum_diff"].abs() <= 3).astype(int)
+    
+    # TeamA yonlu seed bayraklari (simetrik veri setinde 0'a kilitlenmemesi icin)
+    if "TeamA_SeedNum" in final.columns and "TeamB_SeedNum" in final.columns:
+        final["TeamA_Seed_Top4"] = final["TeamA_SeedNum"].between(1, 4).astype(int)
+        final["TeamA_Seed_Mid"] = final["TeamA_SeedNum"].between(5, 10).astype(int)
+        final["TeamA_Seed_Low"] = (final["TeamA_SeedNum"] >= 11).astype(int)
+        final["TeamA_Is_11_12_vs_5_6"] = (
+            final["TeamA_SeedNum"].isin([11, 12]) & final["TeamB_SeedNum"].isin([5, 6])
+        ).astype(int)
+        final["TeamA_Is_5_6_vs_11_12"] = (
+            final["TeamA_SeedNum"].isin([5, 6]) & final["TeamB_SeedNum"].isin([11, 12])
+        ).astype(int)
+
+    round_ctx = build_round_context_features(
+        final[["Season", "DayNum"]],
+        gender=gender,
+        seed_round_slots_df=seed_round_slots_df,
+    )
+    for c in round_ctx.columns:
+        final[c] = round_ctx[c].values
+
     final["Split"] = final["Season"].apply(assign_split)
 
-    keep = ["Season","TeamA","TeamB","Target","Split"] + diff_cols
+    extra_logic_cols = [
+        "Heavy_Favorite",
+        "Toss_Up",
+        "TeamA_Is_Favorite",
+        "TeamA_Is_Underdog",
+        "TeamA_Seed_Top4",
+        "TeamA_Seed_Mid",
+        "TeamA_Seed_Low",
+        "TeamA_Is_11_12_vs_5_6",
+        "TeamA_Is_5_6_vs_11_12",
+        "Round_Num",
+        "Is_FirstWeekend",
+        "Is_SecondWeekend",
+        "Is_FinalWeekend",
+    ]
+    keep = ["Season","TeamA","TeamB","Target","Split"] + diff_cols + extra_logic_cols
     keep = [c for c in keep if c in final.columns]
     
     # Eğitim setini karıştır
@@ -363,23 +737,42 @@ def run_pipeline(gender="M"):
     compact  = load(f"{gender}RegularSeasonCompactResults.csv")
     detailed = load(f"{gender}RegularSeasonDetailedResults.csv")
     t_compact= load(f"{gender}NCAATourneyCompactResults.csv")
+    conf_tourney_raw = load(f"{gender}ConferenceTourneyGames.csv")
+    seed_round_slots_raw = load(f"{gender}NCAATourneySeedRoundSlots.csv")
     seeds_raw= load(f"{gender}NCAATourneySeeds.csv")
+    conf_raw = load(f"{gender}TeamConferences.csv")
+    coaches_raw = load(f"{gender}TeamCoaches.csv")
+    teams_raw = load(f"{gender}Teams.csv")
     massey   = load("MMasseyOrdinals.csv") if gender == "M" else None
 
     if compact is None or t_compact is None or seeds_raw is None:
         print(f"  [HATA] {tag} için zorunlu dosyalar eksik. Atlanıyor.")
         return None
 
-    has_ff = (detailed is not None)
-    if not has_ff:
-        print(f"  [BİLGİ] Detaylı box score yok → Four Factors atlanıyor.")
+    missing_box_cols = get_missing_columns(detailed, REQUIRED_BOXSCORE_COLUMNS)
+    has_ff = detailed is not None and not missing_box_cols
+    if detailed is None:
+        print(f"  [BILGI] Detayli box score yok -> Four Factors atlaniyor.")
+    elif not has_ff:
+        preview = ", ".join(missing_box_cols[:6])
+        suffix = " ..." if len(missing_box_cols) > 6 else ""
+        print(f"  [UYARI] Detaylı box score dosyası eksik kolon içeriyor ({preview}{suffix}).")
+        print(f"  [BİLGİ] Güvenli fallback: CompactResults kullanılacak, Four Factors atlanacak.")
 
     # ── Regular season games_long ──────────────────────────
     print("\n[1] Match Long-Format üretiliyor (Home Court Adjustment yapılıyor)...")
     source = detailed if has_ff else compact
     gl = make_games_long(source, has_boxscore=has_ff)
     if has_ff:
-        gl = compute_four_factors(gl)
+        missing_ff_cols = get_missing_columns(gl, REQUIRED_FOUR_FACTOR_COLUMNS)
+        if missing_ff_cols:
+            preview = ", ".join(missing_ff_cols[:6])
+            suffix = " ..." if len(missing_ff_cols) > 6 else ""
+            print(f"  [UYARI] Four Factors için games_long kolonları eksik ({preview}{suffix}).")
+            print(f"  [BİLGİ] Güvenli fallback: Four Factors kapatıldı, compact-style akışla devam.")
+            has_ff = False
+        else:
+            gl = compute_four_factors(gl)
     print(f"    games_long: {len(gl):,} satır")
 
     # ── Season agregasyonu ─────────────────────────────────
@@ -399,7 +792,7 @@ def run_pipeline(gender="M"):
                     .drop(columns=["DayNum"]))
 
     # ── Rest days & Fatigue ─────────────────────────────────
-    print("[4] Rest days & Yorgunluk penalty'leri (Is_Rusty, BackToBack) ekleniyor...")
+    print("[4] Rest days & yorgunluk baglami (DaysSinceLastGame, GamesLast7/14Days, B2B_Last14Days) ekleniyor...")
     rest = build_rest_days(gl)
     rest_snap = (rest[rest["DayNum"] < 134]
                  .sort_values("DayNum")
@@ -408,29 +801,65 @@ def run_pipeline(gender="M"):
                  .reset_index()
                  .drop(columns=["DayNum"]))
 
-    # ── Elo Features ────────────────────────────────────────
-    print("[5] Custom Elo ratingler (Strength of Schedule'a alternatif) çıkartılıyor...")
-    elo_snap = build_custom_elo(gl)
-    
     # ── Seed features ──────────────────────────────────────
-    print("[6] Seed verisi dönüştürülüyor...")
+    print("[5] Seed verisi dönüştürülüyor...")
     seed_feats = build_seed_features(seeds_raw)
+    
+    # ── Conference features ────────────────────────────────
+    conf_feats = None
+    conf_tourney_feats = None
+    if conf_raw is not None:
+        print("[6] Konferans strength feature'ları hazırlanıyor...")
+    else:
+        print("[6] [UYARI] Conference dosyası bulunamadı, konferans feature'ları atlanıyor.")
+    if conf_tourney_raw is not None:
+        print("[6.1] Konferans turnuvası context feature'ları hazırlanıyor...")
+    else:
+        print("[6.1] [UYARI] ConferenceTourney dosyası bulunamadı, conference-tourney feature'ları atlanıyor.")
+    
+    # ── Coach & Program features ───────────────────────────
+    coach_feats = None
+    program_feats = None
+    if coaches_raw is not None:
+        print("[7] Coach tenure feature'ları hazırlanıyor...")
+    else:
+        print("[7] [UYARI] Coach dosyası bulunamadı, coach feature'ları atlanıyor.")
+    if teams_raw is not None:
+        print("[8] Program age feature'ları hazırlanıyor...")
+    else:
+        print("[8] [UYARI] Teams dosyası bulunamadı, program-age atlanıyor.")
 
     # ── Massey features (Sadece Men) ───────────────────────
     massey_feats = None
     if gender == "M" and massey is not None:
-        print("[7] Massey Elite Consensus hesaplanıyor (Sadece Men)...")
+        print("[9] Massey Elite Consensus hesaplanıyor (Sadece Men)...")
         massey_feats = build_massey_features(massey)
 
     # ── Team features birleştir ───────────────────────────
-    print("\n[8] Tüm Takım verileri tekilleştiriliyor...")
+    print("\n[10] Tüm Takım verileri tekilleştiriliyor...")
     min_season = MIN_SEASON_MEN if gender == "M" else MIN_SEASON_WOMEN
     team_feats = season_agg[season_agg["Season"] >= min_season].copy()
+
+    if conf_raw is not None:
+        conf_feats = build_conference_features(team_feats, conf_raw, seed_feats)
+    if conf_tourney_raw is not None:
+        conf_tourney_feats = build_conf_tourney_features(conf_tourney_raw, t_compact, min_season=min_season)
+    if coaches_raw is not None:
+        coach_feats = build_coach_features(coaches_raw)
+    if teams_raw is not None:
+        program_feats = build_program_features(team_feats, teams_raw)
     
     team_feats = team_feats.merge(rolling_snap, on=["Season","TeamID"], how="left")
     team_feats = team_feats.merge(rest_snap,    on=["Season","TeamID"], how="left")
-    team_feats = team_feats.merge(elo_snap,     on=["Season","TeamID"], how="left")
     team_feats = team_feats.merge(seed_feats,   on=["Season","TeamID"], how="left")
+    if conf_feats is not None and len(conf_feats):
+        team_feats = team_feats.merge(conf_feats, on=["Season","TeamID"], how="left")
+    if conf_tourney_feats is not None and len(conf_tourney_feats):
+        team_feats = team_feats.merge(conf_tourney_feats, on=["Season","TeamID"], how="left")
+    if coach_feats is not None and len(coach_feats):
+        team_feats = team_feats.merge(coach_feats, on=["Season","TeamID"], how="left")
+    if program_feats is not None and len(program_feats):
+        team_feats = team_feats.merge(program_feats, on=["Season","TeamID"], how="left")
     
     if massey_feats is not None:
         team_feats = team_feats.merge(massey_feats, on=["Season","TeamID"], how="left")
@@ -444,20 +873,38 @@ def run_pipeline(gender="M"):
         
     # Gereksiz ve gürültü çıkaran "Games" (Toplam oynanan maç) özelliğini çıkartıyoruz
     team_feats.drop(columns=["Games"], inplace=True, errors="ignore")    
+
+    # Nötr fallback'ler: conference-tourney verisi olmayan takımlar/model satırları için.
+    if "ConfTourneyGamesPlayed" in team_feats.columns:
+        team_feats["ConfTourneyGamesPlayed"] = team_feats["ConfTourneyGamesPlayed"].fillna(0)
+    if "ConfTourneyWinPct" in team_feats.columns:
+        team_feats["ConfTourneyWinPct"] = team_feats["ConfTourneyWinPct"].fillna(0.5)
+    if "ConfTourneyChampion" in team_feats.columns:
+        team_feats["ConfTourneyChampion"] = team_feats["ConfTourneyChampion"].fillna(0).astype(int)
+    if "DaysSinceConfFinal" in team_feats.columns:
+        median_days = team_feats["DaysSinceConfFinal"].dropna().median()
+        if pd.isna(median_days):
+            median_days = 7
+        team_feats["DaysSinceConfFinal"] = team_feats["DaysSinceConfFinal"].fillna(median_days)
         
     # Eksik verileri doldur
     team_feats.fillna(0, inplace=True)
     print(f"    Team Özellikleri Matrisi: {len(team_feats):,} satır, {len(team_feats.columns)} özellik sütunu hazır.")
 
     # ── Matchup matrix üret ───────────────────────────────
-    print("[9] Matchup (Turnuva) Diferansiyel Matrisi birleştiriliyor...")
+    print("[11] Matchup (Turnuva) Diferansiyel Matrisi birleştiriliyor...")
     
     # Turnuva verisini de aynı min_season'dan filtrele
     # Aksi halde 1985-2002 maçları join'da null üretir
     t_compact_filtered = t_compact[t_compact["Season"] >= min_season].copy()
     print(f"    Turnuva filtresi: {min_season}+ -> {len(t_compact_filtered)} maç ({len(t_compact)} -> {len(t_compact_filtered)})")
     
-    matchup = build_matchup_matrix(t_compact_filtered, team_feats, gender=gender)
+    matchup = build_matchup_matrix(
+        t_compact_filtered,
+        team_feats,
+        gender=gender,
+        seed_round_slots_df=seed_round_slots_raw,
+    )
     print(f"    MODEL MATRISI HAZIR: {len(matchup):,} eğitim verisi, {len(matchup.columns)} sütun.")
 
     return matchup
@@ -468,9 +915,9 @@ def run_pipeline(gender="M"):
 # ─────────────────────────────────────────────────────────
 
 def sanity_check(df, name):
-    print(f"\n{'─'*45}")
+    print(f"\n{'-'*45}")
     print(f"SANITY CHECK & DATA LEAKAGE: {name}")
-    print(f"{'─'*45}")
+    print(f"{'-'*45}")
     print(f"Satır sayısı  : {len(df):,}")
     print(f"Sütun sayısı  : {len(df.columns)}")
     print(f"\nTarget dağılımı (Kusursuz 0.5 olmalı):")
@@ -481,10 +928,10 @@ def sanity_check(df, name):
     null_counts = df.isnull().sum()
     null_counts = null_counts[null_counts > 0]
     if len(null_counts):
-        print(f"\n⚠️  Eksik değer olan sütunlar (İncelenmeli):")
+        print(f"\n[UYARI] Eksik deger olan sutunlar (incelenmeli):")
         print(null_counts)
     else:
-        print(f"\n✅ Eksik değer YOK (Kusursuz Merge).")
+        print(f"\n[OK] Eksik deger yok (kusursuz merge).")
         
     diff_cols = [c for c in df.columns if c.endswith("_diff")]
     if diff_cols and "Target" in df.columns:
@@ -507,7 +954,7 @@ if __name__ == "__main__":
     if men_df is not None:
         out_path = os.path.join(OUT_DIR, "processed_features_men.csv")
         men_df.to_csv(out_path, index=False)
-        print(f"\n✅ Men's Dataset Kaydedildi → {out_path}")
+        print(f"\n[OK] Men's Dataset Kaydedildi -> {out_path}")
         sanity_check(men_df, "Men Features")
 
     # 2. Women pipeline (Massey yok, 2010 filtrelenmiş)
@@ -515,7 +962,7 @@ if __name__ == "__main__":
     if women_df is not None:
         out_path = os.path.join(OUT_DIR, "processed_features_women.csv")
         women_df.to_csv(out_path, index=False)
-        print(f"\n✅ Women's Dataset Kaydedildi → {out_path}")
+        print(f"\n[OK] Women's Dataset Kaydedildi -> {out_path}")
         sanity_check(women_df, "Women Features")
 
     print("\n" + "="*55)
