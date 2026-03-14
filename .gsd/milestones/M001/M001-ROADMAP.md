@@ -52,7 +52,7 @@ This milestone is complete only when all are true:
 - [x] **S01: Canonical Run Orchestrator** `risk:medium` `depends:[]`
   > After this: Tek komutla feature→train→eval→report→artifact zinciri tetiklenir.
 
-- [ ] **S02: Split/Leakage Contract Gates** `risk:high` `depends:[S01]`
+- [x] **S02: Split/Leakage Contract Gates** `risk:high` `depends:[S01]`
   > After this: Walk-forward split ve leakage kuralları ihlal edildiğinde run fail verir.
 
 - [ ] **S03: Unified Men/Women Eval Core + Single Execution Path Enforcement** `risk:high` `depends:[S02]`

@@ -13,17 +13,6 @@ Guidelines:
 ## Active
 
 
-### R002 — Deterministic walk-forward split standard
-- Class: quality-attribute
-- Status: active
-- Description: Train<=2022, Val=2023, Test=2024-2025 standardı tüm run’larda zorunlu uygulanır.
-- Why it matters: Val/test karışması ve yanlış iyileşme illüzyonunu engeller.
-- Source: user
-- Primary owning slice: M001/S02
-- Supporting slices: M001/S03
-- Validation: mapped
-- Notes: Rastgele KFold yasak.
-
 ### R003 — Script/notebook parity contract
 - Class: continuity
 - Status: active
@@ -34,17 +23,6 @@ Guidelines:
 - Supporting slices: M001/S07
 - Validation: mapped
 - Notes: Notebook raporlama/inceleme amaçlı kalabilir.
-
-### R004 — Leakage guardrails and checks
-- Class: compliance/security
-- Status: active
-- Description: Maç sonrası bilgi sızıntısını otomatik kontrollerle fail eder.
-- Why it matters: Offline skorların sahte iyileşmesini önler.
-- Source: user
-- Primary owning slice: M001/S02
-- Supporting slices: M001/S07
-- Validation: mapped
-- Notes: Split kontratı + feature kaynak doğrulaması birlikte çalışır.
 
 ### R005 — Separate Men/Women model tracks
 - Class: core-capability
@@ -169,6 +147,28 @@ Guidelines:
 - Validation: validated by execution
 - Notes: `mania_pipeline/scripts/run_pipeline.py --seed 42 --run-label s01_smoke` gerçek veriyle koştu; run metadata + stage lifecycle contract doğrulandı.
 
+### R002 — Deterministic walk-forward split standard
+- Class: quality-attribute
+- Status: validated
+- Description: Train<=2022, Val=2023, Test=2024-2025 standardı tüm run’larda zorunlu uygulanır.
+- Why it matters: Val/test karışması ve yanlış iyileşme illüzyonunu engeller.
+- Source: user
+- Primary owning slice: M001/S02
+- Supporting slices: M001/S03
+- Validation: validated by execution
+- Notes: S02’de split gate runtime’a bağlandı; `test_split_leakage_contracts.py` + `test_run_pipeline_split_leakage_gate.py` + `s02_split_leakage_smoke` run metadata (`stage_outputs.feature.gates`) ile doğrulandı.
+
+### R004 — Leakage guardrails and checks
+- Class: compliance/security
+- Status: validated
+- Description: Maç sonrası bilgi sızıntısını otomatik kontrollerle fail eder.
+- Why it matters: Offline skorların sahte iyileşmesini önler.
+- Source: user
+- Primary owning slice: M001/S02
+- Supporting slices: M001/S07
+- Validation: validated by execution
+- Notes: S02’de leakage gate fail-fast enforce edildi; `feature` stage failed event error.message içinde `blocking_rule` doğrulandı ve pass durumda gate payload’ı metadata’ya persist edildi.
+
 ## Deferred
 
 ### R013 — Hyperparameter optimization (Optuna)
@@ -233,9 +233,9 @@ Guidelines:
 | ID | Class | Status | Primary owner | Supporting | Proof |
 |---|---|---|---|---|---|
 | R001 | primary-user-loop | validated | M001/S01 | M001/S06,S07 | validated (S01 integration runtime + contract checks) |
-| R002 | quality-attribute | active | M001/S02 | M001/S03 | mapped |
+| R002 | quality-attribute | validated | M001/S02 | M001/S03 | validated (S02 split gate contract + integration/runtime checks) |
 | R003 | continuity | active | M001/S03 | M001/S07 | mapped |
-| R004 | compliance/security | active | M001/S02 | M001/S07 | mapped |
+| R004 | compliance/security | validated | M001/S02 | M001/S07 | validated (S02 leakage fail-fast + blocking_rule diagnostics + metadata persistence) |
 | R005 | core-capability | active | M001/S03 | M001/S04 | mapped |
 | R006 | failure-visibility | active | M001/S03 | M001/S06 | mapped |
 | R007 | quality-attribute | active | M001/S04 | M001/S06 | mapped |
@@ -254,7 +254,7 @@ Guidelines:
 
 ## Coverage Summary
 
-- Active requirements: 13
-- Mapped to slices: 13
-- Validated: 1
+- Active requirements: 11
+- Mapped to slices: 11
+- Validated: 3
 - Unmapped active requirements: 0

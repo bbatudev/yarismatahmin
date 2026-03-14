@@ -10,7 +10,7 @@ Tek komutla çalışan, tek gerçeklik üreten, tekrar üretilebilir ve kararlar
 
 ## Current State
 
-S01 tamamlandı: canonical orchestrator artık mevcut (`mania_pipeline/scripts/run_pipeline.py`) ve tek komutla `feature -> train -> eval_report -> artifact` zincirini run-scoped metadata/lifecycle event contract’ı ile çalıştırıyor. Run artifact yüzeyi (`mania_pipeline/artifacts/runs/<run_id>/run_metadata.json`, `stage_events.jsonl`, `eval_report.json`, `artifact_manifest.json`) stabilize edildi. Split/leakage gate, single execution path enforcement, calibration/governance ve reproducibility/regression gate katmanları hâlâ sonraki sliceların işi.
+S01+S02 tamamlandı: canonical orchestrator (`mania_pipeline/scripts/run_pipeline.py`) tek komutla `feature -> train -> eval_report -> artifact` zincirini çalıştırıyor ve artık `feature` stage içinde split/leakage contract gate’leri fail-fast enforce ediyor. Run artifact yüzeyi (`mania_pipeline/artifacts/runs/<run_id>/run_metadata.json`, `stage_events.jsonl`, `eval_report.json`, `artifact_manifest.json`) stabilize; gate diagnostics `run_metadata.json -> stage_outputs.feature.gates.{men,women}` altında persist ediliyor, fail durumda `stage_events.jsonl` `feature` failed event mesajı `blocking_rule` taşıyor. Single execution path enforcement (R003/R019), unified Men/Women eval core, calibration/governance ve reproducibility/regression gate katmanları sonraki sliceların işi.
 
 ## Architecture / Key Patterns
 

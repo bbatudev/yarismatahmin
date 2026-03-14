@@ -11,6 +11,7 @@ import sys
 import time
 import traceback
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable
 
@@ -77,6 +78,56 @@ def _load_script_module(filename: str, module_name: str):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+@lru_cache(maxsize=1)
+def _load_split_leakage_contracts_module():
+    return _load_script_module("split_leakage_contracts.py", "split_leakage_contracts_stage")
+
+
+def validate_split_contract(df):
+    contracts_module = _load_split_leakage_contracts_module()
+    return contracts_module.validate_split_contract(df)
+
+
+def validate_leakage_contract(df):
+    contracts_module = _load_split_leakage_contracts_module()
+    return contracts_module.validate_leakage_contract(df)
+
+
+def _combine_feature_gate_payloads(split_gate: dict[str, Any], leakage_gate: dict[str, Any]) -> dict[str, Any]:
+    failing_gate = None
+    if not split_gate.get("pass", False):
+        failing_gate = split_gate
+    elif not leakage_gate.get("pass", False):
+        failing_gate = leakage_gate
+
+    if failing_gate is not None:
+        return {
+            "pass": False,
+            "blocking_rule": failing_gate.get("blocking_rule"),
+            "reason": failing_gate.get("reason", "Feature gate failed."),
+            "evidence": {
+                "split": split_gate,
+                "leakage": leakage_gate,
+            },
+        }
+
+    return {
+        "pass": True,
+        "blocking_rule": None,
+        "reason": "Split and leakage contracts satisfied.",
+        "evidence": {
+            "split": split_gate,
+            "leakage": leakage_gate,
+        },
+    }
+
+
+def _raise_feature_gate_failure(gender_label: str, gate_payload: dict[str, Any]) -> None:
+    blocking_rule = gate_payload.get("blocking_rule") or "UNKNOWN_BLOCKING_RULE"
+    reason = gate_payload.get("reason") or "Feature gate failed."
+    raise RuntimeError(f"[{gender_label}] feature gate failed: {blocking_rule} | {reason}")
 
 
 def build_run_context(
@@ -203,6 +254,22 @@ def stage_feature(context: dict[str, Any]) -> dict[str, Any]:
     if men_df is None or women_df is None:
         raise RuntimeError("Feature engineering returned empty dataframe for Men or Women")
 
+    gates: dict[str, dict[str, Any]] = {}
+    first_failure: tuple[str, dict[str, Any]] | None = None
+
+    for gender_key, frame in (("men", men_df), ("women", women_df)):
+        split_gate = validate_split_contract(frame)
+        leakage_gate = validate_leakage_contract(frame)
+        combined_gate = _combine_feature_gate_payloads(split_gate, leakage_gate)
+        gates[gender_key] = combined_gate
+
+        if not combined_gate["pass"] and first_failure is None:
+            first_failure = (gender_key, combined_gate)
+
+    if first_failure is not None:
+        failed_gender, failed_gate = first_failure
+        _raise_feature_gate_failure(failed_gender, failed_gate)
+
     men_path = Path(feature_module.OUT_DIR) / "processed_features_men.csv"
     women_path = Path(feature_module.OUT_DIR) / "processed_features_women.csv"
 
@@ -218,6 +285,7 @@ def stage_feature(context: dict[str, Any]) -> dict[str, Any]:
             "men": int(len(men_df)),
             "women": int(len(women_df)),
         },
+        "gates": gates,
     }
 
 
