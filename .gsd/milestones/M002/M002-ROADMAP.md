@@ -56,7 +56,7 @@ This milestone is complete only when all are true:
 - [x] **S03: Governance Decision Fusion (Ablation + Drift + Calibration)** `risk:medium` `depends:[S01,S02]`
   > After this: Governance decision surface reason-coded confidence ile multi-evidence karar üretir.
 
-- [ ] **S04: Policy-Gated Final Integration** `risk:medium` `depends:[S03]`
+- [x] **S04: Policy-Gated Final Integration** `risk:medium` `depends:[S03]`
   > After this: Regression gate policy sinyallerini consume eder ve milestone final integration proof’u canonical run’da alınır.
 
 ## Boundary Map

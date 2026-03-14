@@ -432,14 +432,22 @@ def _extract_run_snapshot(stage_outputs: dict[str, Any]) -> dict[str, Any]:
     snapshot = {
         "metrics": {"men": {}, "women": {}},
         "calibration": {"men": {}, "women": {}},
+        "calibration_policy": {"men": {}, "women": {}},
+        "governance_decision": {"men": {}, "women": {}, "aggregate_decision": None},
     }
 
     train_metrics = stage_outputs.get("train", {}).get("metrics_by_split", {}) if isinstance(stage_outputs, dict) else {}
+    eval_output = stage_outputs.get("eval_report", {}) if isinstance(stage_outputs, dict) else {}
     calibration_summary = (
-        stage_outputs.get("eval_report", {}).get("calibration", {}).get("calibration_summary", {})
-        if isinstance(stage_outputs, dict)
+        eval_output.get("calibration", {}).get("calibration_summary", {})
+        if isinstance(eval_output, dict)
         else {}
     )
+    calibration_policy = eval_output.get("calibration_policy", {}) if isinstance(eval_output, dict) else {}
+    policy_by_gender = calibration_policy.get("by_gender", {}) if isinstance(calibration_policy, dict) else {}
+    governance_decision = eval_output.get("governance_decision", {}) if isinstance(eval_output, dict) else {}
+    governance_by_gender = governance_decision.get("by_gender", {}) if isinstance(governance_decision, dict) else {}
+    governance_aggregate = governance_decision.get("aggregate", {}) if isinstance(governance_decision, dict) else {}
 
     for gender_key in ("men", "women"):
         split_metrics = train_metrics.get(gender_key, {}).get("Test", {}) if isinstance(train_metrics, dict) else {}
@@ -461,6 +469,28 @@ def _extract_run_snapshot(stage_outputs: dict[str, Any]) -> dict[str, Any]:
             "high_prob_gap": _as_float_or_none(high_prob.get("gap")) if isinstance(high_prob, dict) else None,
             "high_prob_reason": high_prob.get("reason") if isinstance(high_prob, dict) else None,
         }
+
+        policy_entry = policy_by_gender.get(gender_key, {}) if isinstance(policy_by_gender, dict) else {}
+        snapshot["calibration_policy"][gender_key] = {
+            "selected_method": policy_entry.get("selected_method") if isinstance(policy_entry, dict) else None,
+            "default_method": policy_entry.get("default_method") if isinstance(policy_entry, dict) else None,
+        }
+
+        decision_entry = governance_by_gender.get(gender_key, {}) if isinstance(governance_by_gender, dict) else {}
+        evidence_bundle = decision_entry.get("evidence_bundle", {}) if isinstance(decision_entry, dict) else {}
+        calibration_evidence = evidence_bundle.get("calibration_policy", {}) if isinstance(evidence_bundle, dict) else {}
+        snapshot["governance_decision"][gender_key] = {
+            "decision": decision_entry.get("decision") if isinstance(decision_entry, dict) else None,
+            "confidence": _as_float_or_none(decision_entry.get("confidence")) if isinstance(decision_entry, dict) else None,
+            "reason_codes": decision_entry.get("reason_codes") if isinstance(decision_entry, dict) else None,
+            "calibration_improvement": _as_float_or_none(
+                calibration_evidence.get("test_brier_improvement_vs_none") if isinstance(calibration_evidence, dict) else None
+            ),
+        }
+
+    snapshot["governance_decision"]["aggregate_decision"] = (
+        governance_aggregate.get("decision") if isinstance(governance_aggregate, dict) else None
+    )
 
     return snapshot
 
@@ -559,8 +589,9 @@ def _evaluate_regression_gate(
         "reason": "no_baseline_run",
         "policy": {
             "brier": "mandatory_non_degradation",
-            "calibration": "degradation_fails",
+            "calibration": "degradation_fails_unless_policy_fallback",
             "auc": "informational",
+            "policy_fallback": "apply_calibration_policy_with_confidence>=0.60_and_positive_improvement",
         },
         "by_gender": {},
         "baseline_run_id": None,
@@ -573,12 +604,20 @@ def _evaluate_regression_gate(
     report["baseline_run_id"] = baseline_metadata.get("run_id")
 
     blocking_failures: list[str] = []
+    warnings: list[str] = []
 
     for gender_key in ("men", "women"):
         current_metrics = current_snapshot.get("metrics", {}).get(gender_key, {})
         baseline_metrics = baseline_snapshot.get("metrics", {}).get(gender_key, {})
         current_cal = current_snapshot.get("calibration", {}).get(gender_key, {})
         baseline_cal = baseline_snapshot.get("calibration", {}).get(gender_key, {})
+        current_decision = current_snapshot.get("governance_decision", {}).get(gender_key, {})
+
+        policy_decision = current_decision.get("decision") if isinstance(current_decision, dict) else None
+        policy_confidence = _as_float_or_none(current_decision.get("confidence")) if isinstance(current_decision, dict) else None
+        policy_calibration_improvement = (
+            _as_float_or_none(current_decision.get("calibration_improvement")) if isinstance(current_decision, dict) else None
+        )
 
         brier_delta = _safe_delta(current_metrics.get("brier"), baseline_metrics.get("brier"))
         if brier_delta is None:
@@ -626,10 +665,24 @@ def _evaluate_regression_gate(
         if abs_gap_delta is not None and abs_gap_delta > REGRESSION_NUMERIC_EPS:
             calibration_reasons.append("high_prob_gap_degraded")
 
+        policy_fallback_applied = False
+        policy_fallback_reason = None
         if calibration_reasons:
-            blocking_failures.append(f"{gender_key}:calibration_degraded")
-            calibration_rule_status = "failed"
-            calibration_rule_reason = ",".join(calibration_reasons)
+            can_fallback = (
+                policy_decision == "apply_calibration_policy"
+                and (policy_confidence is not None and policy_confidence >= 0.60)
+                and (policy_calibration_improvement is not None and policy_calibration_improvement > REGRESSION_NUMERIC_EPS)
+            )
+            if can_fallback:
+                policy_fallback_applied = True
+                policy_fallback_reason = "degraded_but_policy_fallback"
+                calibration_rule_status = "warning"
+                calibration_rule_reason = policy_fallback_reason
+                warnings.append(f"{gender_key}:calibration_degraded_policy_fallback")
+            else:
+                blocking_failures.append(f"{gender_key}:calibration_degraded")
+                calibration_rule_status = "failed"
+                calibration_rule_reason = ",".join(calibration_reasons)
         else:
             calibration_rule_status = "passed"
             calibration_rule_reason = None
@@ -646,6 +699,13 @@ def _evaluate_regression_gate(
                 "baseline_high_prob_reason": baseline_cal.get("high_prob_reason"),
                 "current_high_prob_reason": current_cal.get("high_prob_reason"),
             },
+            "policy_gate": {
+                "decision": policy_decision,
+                "confidence": policy_confidence,
+                "calibration_improvement": policy_calibration_improvement,
+                "fallback_applied": policy_fallback_applied,
+                "fallback_reason": policy_fallback_reason,
+            },
             "auc_info": {
                 "current_test_auc": current_metrics.get("auc"),
                 "baseline_test_auc": baseline_metrics.get("auc"),
@@ -660,6 +720,8 @@ def _evaluate_regression_gate(
     else:
         report["status"] = "passed"
         report["reason"] = None
+
+    report["warnings"] = warnings
 
     return report
 
@@ -2051,6 +2113,36 @@ def stage_artifact(context: dict[str, Any]) -> dict[str, Any]:
     regression_path = run_dir / "regression_gate_report.json"
     _write_json(regression_path, regression_payload)
 
+    policy_gate_payload = {
+        "run_id": context["run_id"],
+        "generated_at": _now_utc_iso(),
+        "regression_status": regression_payload.get("status"),
+        "regression_reason": regression_payload.get("reason"),
+        "aggregate_decision": current_snapshot.get("governance_decision", {}).get("aggregate_decision"),
+        "blocking_failures": regression_payload.get("blocking_failures", []),
+        "warnings": regression_payload.get("warnings", []),
+        "by_gender": {},
+    }
+    for gender_key in ("men", "women"):
+        regression_gender = regression_payload.get("by_gender", {}).get(gender_key, {})
+        decision_gender = current_snapshot.get("governance_decision", {}).get(gender_key, {})
+        policy_gate_payload["by_gender"][gender_key] = {
+            "decision": decision_gender.get("decision") if isinstance(decision_gender, dict) else None,
+            "confidence": decision_gender.get("confidence") if isinstance(decision_gender, dict) else None,
+            "brier_rule_status": regression_gender.get("brier_rule", {}).get("status")
+            if isinstance(regression_gender, dict)
+            else None,
+            "calibration_rule_status": regression_gender.get("calibration_rule", {}).get("status")
+            if isinstance(regression_gender, dict)
+            else None,
+            "policy_fallback_applied": regression_gender.get("policy_gate", {}).get("fallback_applied")
+            if isinstance(regression_gender, dict)
+            else None,
+        }
+
+    policy_gate_path = run_dir / "policy_gate_report.json"
+    _write_json(policy_gate_path, policy_gate_payload)
+
     if missing_artifacts:
         raise RuntimeError(
             "artifact contract failed: missing required artifacts -> " + ", ".join(sorted(missing_artifacts))
@@ -2096,6 +2188,10 @@ def stage_artifact(context: dict[str, Any]) -> dict[str, Any]:
                 "status": regression_payload.get("status"),
                 "report_json": str(regression_path),
             },
+            "policy_gate": {
+                "status": policy_gate_payload.get("regression_status"),
+                "report_json": str(policy_gate_path),
+            },
             "submission": {
                 "status": submission_payload.get("status"),
                 "report_json": submission_payload.get("validation_report_json"),
@@ -2123,6 +2219,10 @@ def stage_artifact(context: dict[str, Any]) -> dict[str, Any]:
         "regression_gate": {
             "status": regression_payload.get("status"),
             "report_json": str(regression_path),
+        },
+        "policy_gate": {
+            "status": policy_gate_payload.get("regression_status"),
+            "report_json": str(policy_gate_path),
         },
         "submission": {
             "status": submission_payload.get("status"),
