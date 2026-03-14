@@ -26,6 +26,7 @@
 | 07-03-2026 | - | 4 | v0.5 | Tüm korelasyon analizleri (8/8) ve değişken klasörleri (11/11) tamamlandı, KORELASYON_KULLANIM_RAPORU.md güncellendi, baseline model için hazır |
 | 07-03-2026 | 14:50 | 5 | v0.6 | İleri seviye feature engineering: bağlamsal dinlenme, FTr context, konferans turnuvası momentumu, tur bağlamı, Bayesian smoothing, kod temizliği |
 | 07-03-2026 | 18:20 | 6 | v0.7 | Korelasyon raporundan sadece uygulanan kararlar progress'e işlendi; konferans turnuvası + tur bağlamı aktif doğrulandı, zayıf değişken temizliği tamamlandı |
+| 14-03-2026 | - | 7 | v0.8 | Progress dosyası kodla hizalandı: tamamlanan maddeler güncellendi, split/notebook-script farkı netleştirildi |
 
 **Format:** GG-AA-YYYY | HH:MM | Oturum No | vX.X | Kısa açıklama
 
@@ -123,7 +124,7 @@ Erkek verileri ile aynı yapıda:
 | Terim | Açıklama |
 |-------|----------|
 | **Brier Score** | Olasılık tahminlerinin kalitesini ölçen metrik. 0=mükemmel, 1=en kötü. Formül: 1/N * Σ(forecast - outcome)² |
-| **Massey Ordinals** | Kenneth Massey tarafından geliştirilen, 196 farklı sıralama sisteminin birleşimi. **Düşük rank = daha iyi takım** (TERS!) |
+| **Massey Ordinals** | Takım sıralama sinyali. Bu pipeline'da sadece elite sistemler (`POM`, `SAG`, `NET`, `BPI`, `MOR`, `KPI`) kullanılır. **Düşük rank = daha iyi takım** (TERS!) |
 | **Seed** | Turnuvadaki takımların sıralaması (1-16 arası). W01 = West bölgesi 1. sıra |
 | **WLoc** | Maç yeri: H=Home (ev), A=Away (deplasman), N=Neutral (nötr) |
 | **DayNum** | Sezon içindeki gün numarası (0=Season başı, 132=Turnuva başı) |
@@ -141,7 +142,7 @@ Erkek verileri ile aynı yapıda:
 
 | Model | Brier Score | CV Skor | Test Skor | Notlar | Tarih |
 |-------|-------------|---------|-----------|--------|-------|
-| Baseline | - | - | - | Logistic Regression | |
+| Baseline (LightGBM) | - | - | - | `03_lgbm_train.py` + model artifact'lar mevcut; metrikler yeniden tek akışta raporlanacak | 07-03-2026 |
 | | | | | | |
 | | | | | | |
 
@@ -172,10 +173,11 @@ Bu kurallar analiz ve modelleme sürecinde **KESİNLİKLE** uyulması gereken te
 | **Environment kurulumu** | ✅ Tamamlandı | Virtual environment mevcut |
 | **Oturum rapor sistemi** | ✅ Tamamlandı | session_start.md, session_end.md, günlük klasörler |
 | **Değişkenlerin tek tek analizi** | ✅ Tamamlandı | 11 klasör, 40+ değişken grubu detaylı analiz edildi |
-| **Feature engineering script'i** | ✅ Tamamlandı | 02_feature_engineering.py ile SeedDiff, MasseyRankDiff, WinPctDiff, PointDiffDiff feature'ları üretildi |
+| **Feature engineering script'i** | ✅ Tamamlandı | 02_feature_engineering.py ile `SeedNum_diff`, `MasseyAvgRank_diff`, `WinPct_diff`, `TrueMarginAvg_diff` ve bağlamsal feature'lar üretildi |
 | **Korelasyon analizleri (8/8)** | ✅ Tamamlandı | Tüm korelasyon dosyaları incelendi, kararlar alındı |
 | **KORELASYON_KULLANIM_RAPORU.md** | ✅ Tamamlandı | Tüm kararlar ve test planları belgelendi |
 | **İleri seviye feature engineering (v0.6)** | ✅ Tamamlandı | Aşağıda detaylar |
+| **Baseline model kurulumu (LightGBM)** | ✅ Tamamlandı | `03_lgbm_train.py` eklendi, model artifact dosyaları üretildi |
 
 **v0.6 – İleri Seviye Feature Engineering Detayları:**
 
@@ -211,9 +213,8 @@ Bu kurallar analiz ve modelleme sürecinde **KESİNLİKLE** uyulması gereken te
 
 | Görev | Öncelik | Notlar |
 |-------|---------|--------|
-| **Korelasyon dosyaları analizi (4. dosyadan devam)** | 🔴 Yüksek | 04_wloc_analizi.txt'den başlayacak (5,6,7,8 kaldı) |
-| **Baseline model oluştur** | 🔴 Yüksek | LightGBM ile başlangıç modeli (03_lgbm_train.py) |
-| **Model eğitimi ve değerlendirme** | 🔴 Yüksek | Brier Score ile performans ölçümü |
+| **Notebook ve script eğitim akışını hizala** | 🔴 Yüksek | Feature seçimi ve test split farkı tek standarda indirilecek |
+| **Tek doğruluk kaynağı belirle** | 🔴 Yüksek | Eğitim için notebook mu script mi resmi kaynak olacak netleştirilecek |
 | **StdOrdinalRank testi** | 🟡 Orta | Baseline sonrası ekle, Brier Score > 0.001 improvement kontrol et |
 | **Hyperparameter tuning** | 🟡 Orta | Optuna ile optimizasyon |
 | **Probability calibration** | 🟡 Orta | Brier Score için olasılık kalibrasyonu |
@@ -223,7 +224,7 @@ Bu kurallar analiz ve modelleme sürecinde **KESİNLİKLE** uyulması gereken te
 
 | Görev | Sebep |
 |-------|-------|
-| Model Eğitimi | Analiz fazı tamamlandı, eğitim aşamasına geçiliyor. |
+| Notebook/Script tam hizalama | Şu an iki akış farklı feature/split mantığıyla çalışabiliyor; tek standarda bağlanmalı. |
 
 ---
 
@@ -310,13 +311,13 @@ Bu kurallar analiz ve modelleme sürecinde **KESİNLİKLE** uyulması gereken te
 ### Train/Test Split Stratejisi
 
 ```
-Train: 2016, 2017, 2018, 2019, 2021, 2022
-Val:   2023
-Test:  2024, 2025
+Kanonik Pipeline (script): Train <= 2022, Val = 2023, Test = 2024-2025
+Notebook (mevcut):         Train <= 2022, Val = 2023, Test = 2024
 ```
 
 **❌ ASLA rastgele split yapma!**
 **❌ Aynı sezonu train ve test'e koşma!**
+**⚠️ Not:** Script ve notebook split/feature seçimi hizalanmadan metrik karşılaştırması tek başına yorumlanmamalı.
 
 ---
 
@@ -345,16 +346,6 @@ git log --oneline -10
 
 # Commit detaylari (her bir commit icin)
 git show --stat <commit-hash>
-
-# MEVCUT SON 10 COMMIT (Guncel):
-# 7672dd8 - feat: korelasyon analizleri, veri toplama ve dogrulama scriptleri
-# 36c6ada - chore: Kiro ve Claude icin oturum baslangic hook'lari guncellendi
-# 084d3e5 - Update analiz.txt
-# ff35228 - degisken analizi, analiz txt devam
-# c713101 - chore: setup empty data and competition directories
-# 280bdd9 - Giris
-# 93dce3a - feat: 26-02-2026 16:45 oturum yonetim sistemi ve saat takibi
-# 329b340 - Initial commit
 
 # Degisiklikleri ekle
 git add .
@@ -425,7 +416,7 @@ yarismatahmin/
 ├── mania_pipeline/
 │   ├── scripts/
 │   │   ├── 02_feature_engineering.py   # Ana feature pipeline
-│   │   ├── 03_lgbm_train.py            # Model eğitim scripti (taslak)
+│   │   ├── 03_lgbm_train.py            # Baseline model eğitim scripti
 │   │   └── analyze_weak_features.py    # Zayıf feature analiz aracı
 │   ├── artifacts/data/
 │   │   ├── processed_features_men.csv   # Erkek feature matrisi
@@ -443,10 +434,11 @@ yarismatahmin/
 1. **✅ DEĞİŞKEN ANALİZİ (TAMAMLANDI)** - Tüm 40+ değişken grubu ve 8 korelasyon dosyası analiz edildi.
 2. **✅ KUSURSUZ DOĞRULAMA (TAMAMLANDI)** - Tüm korelasyon ve değişken analizleri Turnuva verisi üzerinden doğrulandı.
 3. **✅ İLERİ SEVİYE FEATURE ENGINEERING (v0.6)** - Bağlamsal dinlenme, FTr context, konf. turnuvası, tur bağlamı, Bayesian smoothing.
-4. **⏳ BASELINE MODEL KURULUMU** - LightGBM ile ilk model eğitimi (03_lgbm_train.py).
-5. **Model Optimizasyonu** - Hyperparameter tuning ve probability calibration.
-6. **Kaggle Submission** - Stage 1 için submission dosyası üretme.
+4. **✅ BASELINE MODEL KURULUMU** - LightGBM baseline + model artifact üretimi tamamlandı.
+5. **⏳ EĞİTİM AKIŞI HİZALAMA** - Notebook ve script tek feature/split standardına çekilecek.
+6. **Model Optimizasyonu** - Hyperparameter tuning ve probability calibration.
+7. **Kaggle Submission** - Stage 1 için submission dosyası üretme.
 
 ---
 
-*Son Güncelleme: 07-03-2026*
+*Son Güncelleme: 14-03-2026*
