@@ -72,6 +72,12 @@ data/processed_features.csv
 .gsd/metrics.json
 .gsd/completed-units.json
 .gsd/STATE.md
+.gsd/agent/
+
+# Generated ML artifacts (run outputs / models)
+mania_pipeline/artifacts/models/
+mania_pipeline/artifacts/runs/
+mania_pipeline/artifacts/runs_m003/
 Thumbs.db
 *.swp
 *.swo
