@@ -290,6 +290,21 @@ def stage_feature(context: dict[str, Any]) -> dict[str, Any]:
 
 
 def stage_train(context: dict[str, Any]) -> dict[str, Any]:
+    feature_outputs = context.get("stage_outputs", {}).get("feature", {})
+    gates = feature_outputs.get("gates", {})
+
+    for gender_key in ("men", "women"):
+        gate_payload = gates.get(gender_key)
+        if not isinstance(gate_payload, dict):
+            gate_payload = {
+                "pass": False,
+                "blocking_rule": "MISSING_FEATURE_GATE",
+                "reason": "Missing feature gate payload before train stage.",
+            }
+
+        if not gate_payload.get("pass", False):
+            _raise_feature_gate_failure(gender_key, gate_payload)
+
     train_module = _load_script_module("03_lgbm_train.py", "lgbm_train_stage")
 
     train_module.DATA_DIR = str(PIPELINE_DIR / "artifacts" / "data")
@@ -302,8 +317,8 @@ def stage_train(context: dict[str, Any]) -> dict[str, Any]:
     if men_df is None or women_df is None:
         raise RuntimeError("Training data missing; feature stage did not produce required files")
 
-    men_model, men_brier = train_module.train_baseline(men_df, "M", random_state=context["seed"])
-    women_model, women_brier = train_module.train_baseline(women_df, "W", random_state=context["seed"])
+    men_model, men_payload = train_module.train_baseline(men_df, "M", random_state=context["seed"])
+    women_model, women_payload = train_module.train_baseline(women_df, "W", random_state=context["seed"])
 
     model_dir = Path(train_module.OUT_DIR)
     men_model_path = model_dir / f"lgbm_baseline_men_{context['run_id']}.pkl"
@@ -314,26 +329,94 @@ def stage_train(context: dict[str, Any]) -> dict[str, Any]:
     with women_model_path.open("wb") as handle:
         pickle.dump(women_model, handle)
 
-    return {
-        "models": {
-            "men": str(men_model_path),
-            "women": str(women_model_path),
+    genders = {
+        "men": {
+            "gender": men_payload.get("gender", "M"),
+            "model_path": str(men_model_path),
+            "metrics_by_split": men_payload.get("metrics_by_split", {}),
+            "feature_snapshot": men_payload.get("feature_snapshot", {}),
+            "best_iteration": men_payload.get("best_iteration"),
         },
-        "metrics": {
-            "men_test_brier": men_brier,
-            "women_test_brier": women_brier,
+        "women": {
+            "gender": women_payload.get("gender", "W"),
+            "model_path": str(women_model_path),
+            "metrics_by_split": women_payload.get("metrics_by_split", {}),
+            "feature_snapshot": women_payload.get("feature_snapshot", {}),
+            "best_iteration": women_payload.get("best_iteration"),
+        },
+    }
+
+    return {
+        "genders": genders,
+        "models": {
+            "men": genders["men"]["model_path"],
+            "women": genders["women"]["model_path"],
+        },
+        "metrics_by_split": {
+            "men": genders["men"]["metrics_by_split"],
+            "women": genders["women"]["metrics_by_split"],
+        },
+        "feature_snapshot": {
+            "men": genders["men"]["feature_snapshot"],
+            "women": genders["women"]["feature_snapshot"],
+        },
+        "best_iteration": {
+            "men": genders["men"]["best_iteration"],
+            "women": genders["women"]["best_iteration"],
         },
     }
 
 
 def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
     train_result = context.get("stage_outputs", {}).get("train", {})
+    metrics_by_split = train_result.get("metrics_by_split", {})
+
+    if not isinstance(metrics_by_split, dict):
+        raise RuntimeError("Train stage output missing metrics_by_split contract.")
+
+    metrics_table: list[dict[str, Any]] = []
+    for gender_key in ("men", "women"):
+        gender_metrics = metrics_by_split.get(gender_key, {})
+        for split_label in ("Train", "Val", "Test"):
+            split_metrics = gender_metrics.get(split_label, {})
+            metrics_table.append(
+                {
+                    "gender": gender_key,
+                    "split": split_label,
+                    "brier": split_metrics.get("brier"),
+                    "logloss": split_metrics.get("logloss"),
+                    "auc": split_metrics.get("auc"),
+                }
+            )
+
+    def _safe_delta(left: Any, right: Any) -> float | None:
+        if isinstance(left, (int, float)) and isinstance(right, (int, float)):
+            return float(left - right)
+        return None
+
+    men_test = metrics_by_split.get("men", {}).get("Test", {})
+    women_test = metrics_by_split.get("women", {}).get("Test", {})
+
+    side_by_side_summary = {
+        "men_test_brier": men_test.get("brier"),
+        "women_test_brier": women_test.get("brier"),
+        "delta_test_brier": _safe_delta(men_test.get("brier"), women_test.get("brier")),
+        "men_test_logloss": men_test.get("logloss"),
+        "women_test_logloss": women_test.get("logloss"),
+        "delta_test_logloss": _safe_delta(men_test.get("logloss"), women_test.get("logloss")),
+        "men_test_auc": men_test.get("auc"),
+        "women_test_auc": women_test.get("auc"),
+        "delta_test_auc": _safe_delta(men_test.get("auc"), women_test.get("auc")),
+    }
+
     report_payload = {
         "run_id": context["run_id"],
         "seed": context["seed"],
         "generated_at": _now_utc_iso(),
-        "metrics": train_result.get("metrics", {}),
         "models": train_result.get("models", {}),
+        "feature_snapshot": train_result.get("feature_snapshot", {}),
+        "metrics_table": metrics_table,
+        "side_by_side_summary": side_by_side_summary,
     }
 
     report_path = Path(context["run_dir"]) / "eval_report.json"

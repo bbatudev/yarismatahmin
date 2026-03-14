@@ -55,7 +55,7 @@ This milestone is complete only when all are true:
 - [x] **S02: Split/Leakage Contract Gates** `risk:high` `depends:[S01]`
   > After this: Walk-forward split ve leakage kuralları ihlal edildiğinde run fail verir.
 
-- [ ] **S03: Unified Men/Women Eval Core + Single Execution Path Enforcement** `risk:high` `depends:[S02]`
+- [x] **S03: Unified Men/Women Eval Core + Single Execution Path Enforcement** `risk:high` `depends:[S02]`
   > After this: Men/Women metrik tablosu + side-by-side özet üretilir ve eğitim yolu script-first tek gerçeklikte kilitlenir.
 
 - [ ] **S04: Calibration Layer + Overconfidence/Drift Reporting** `risk:high` `depends:[S03]`

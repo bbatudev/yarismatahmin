@@ -13,39 +13,6 @@ Guidelines:
 ## Active
 
 
-### R003 — Script/notebook parity contract
-- Class: continuity
-- Status: active
-- Description: Feature/split gerçekliği tek kaynaktan gelir; notebook farklı eğitim gerçekliği üretemez.
-- Why it matters: İki farklı “doğru” olmasını önler.
-- Source: user
-- Primary owning slice: M001/S03
-- Supporting slices: M001/S07
-- Validation: mapped
-- Notes: Notebook raporlama/inceleme amaçlı kalabilir.
-
-### R005 — Separate Men/Women model tracks
-- Class: core-capability
-- Status: active
-- Description: Men ve Women eğitim/eval akışları ayrı yürütülür ve ayrı artifact üretir.
-- Why it matters: Cinsiyetler arası davranış farkını maskelemeyi önler.
-- Source: user
-- Primary owning slice: M001/S03
-- Supporting slices: M001/S04
-- Validation: mapped
-- Notes: Ortak kod tabanı, ayrı model nesneleri.
-
-### R006 — Standard metrics + side-by-side summary
-- Class: failure-visibility
-- Status: active
-- Description: Train/Val/Test için Brier, LogLoss, AUC raporlanır; ek olarak Men vs Women yan-yana özet satırı zorunludur.
-- Why it matters: Performans ve cinsiyet farkı tek bakışta görülebilir.
-- Source: user
-- Primary owning slice: M001/S03
-- Supporting slices: M001/S06
-- Validation: mapped
-- Notes: Test dönemi 2024-2025 birlikte raporlanır.
-
 ### R007 — Calibration + overconfidence/drift report
 - Class: quality-attribute
 - Status: active
@@ -123,17 +90,6 @@ Guidelines:
 - Validation: mapped
 - Notes: Çoklu kural: Brier zorunlu, calibration kötüleşmesi fail, AUC bilgi amaçlı.
 
-### R019 — Single execution path enforcement
-- Class: constraint
-- Status: active
-- Description: Eğitim için iki ayrı yol bırakılmaz; script tek kaynak olur, notebook eğitim yürütmez.
-- Why it matters: Notebook-script sapmasını teknik olarak kapatır.
-- Source: user
-- Primary owning slice: M001/S03
-- Supporting slices: M001/S07
-- Validation: mapped
-- Notes: Notebook yalnız raporlama/EDA rolünde kalır.
-
 ## Validated
 
 ### R001 — Canonical end-to-end run command
@@ -168,6 +124,50 @@ Guidelines:
 - Supporting slices: M001/S07
 - Validation: validated by execution
 - Notes: S02’de leakage gate fail-fast enforce edildi; `feature` stage failed event error.message içinde `blocking_rule` doğrulandı ve pass durumda gate payload’ı metadata’ya persist edildi.
+
+### R003 — Script/notebook parity contract
+- Class: continuity
+- Status: validated
+- Description: Feature/split gerçekliği tek kaynaktan gelir; notebook farklı eğitim gerçekliği üretemez.
+- Why it matters: İki farklı “doğru” olmasını önler.
+- Source: user
+- Primary owning slice: M001/S03
+- Supporting slices: M001/S07
+- Validation: validated by execution
+- Notes: S03’te notebook reporting-only role’e indirildi; `test_notebook_execution_path_guard.py` forbidden training/persist primitive’lerini fail ediyor.
+
+### R005 — Separate Men/Women model tracks
+- Class: core-capability
+- Status: validated
+- Description: Men ve Women eğitim/eval akışları ayrı yürütülür ve ayrı artifact üretir.
+- Why it matters: Cinsiyetler arası davranış farkını maskelemeyi önler.
+- Source: user
+- Primary owning slice: M001/S03
+- Supporting slices: M001/S04
+- Validation: validated by execution
+- Notes: S03’te unified core ile ayrı gender payload/artifact kontratı (`stage_outputs.train.genders.{men,women}`) runtime’da doğrulandı.
+
+### R006 — Standard metrics + side-by-side summary
+- Class: failure-visibility
+- Status: validated
+- Description: Train/Val/Test için Brier, LogLoss, AUC raporlanır; ek olarak Men vs Women yan-yana özet satırı zorunludur.
+- Why it matters: Performans ve cinsiyet farkı tek bakışta görülebilir.
+- Source: user
+- Primary owning slice: M001/S03
+- Supporting slices: M001/S06
+- Validation: validated by execution
+- Notes: S03 canonical runtime’da `eval_report.json` içine `metrics_table` + `side_by_side_summary` kontratıyla doğrulandı.
+
+### R019 — Single execution path enforcement
+- Class: constraint
+- Status: validated
+- Description: Eğitim için iki ayrı yol bırakılmaz; script tek kaynak olur, notebook eğitim yürütmez.
+- Why it matters: Notebook-script sapmasını teknik olarak kapatır.
+- Source: user
+- Primary owning slice: M001/S03
+- Supporting slices: M001/S07
+- Validation: validated by execution
+- Notes: S03’te notebook authority guard testi ile eğitim/persist primitive geri gelişi CI seviyesinde fail ediliyor.
 
 ## Deferred
 
@@ -234,10 +234,10 @@ Guidelines:
 |---|---|---|---|---|---|
 | R001 | primary-user-loop | validated | M001/S01 | M001/S06,S07 | validated (S01 integration runtime + contract checks) |
 | R002 | quality-attribute | validated | M001/S02 | M001/S03 | validated (S02 split gate contract + integration/runtime checks) |
-| R003 | continuity | active | M001/S03 | M001/S07 | mapped |
+| R003 | continuity | validated | M001/S03 | M001/S07 | validated (S03 notebook guard + script-first runtime evidence) |
 | R004 | compliance/security | validated | M001/S02 | M001/S07 | validated (S02 leakage fail-fast + blocking_rule diagnostics + metadata persistence) |
-| R005 | core-capability | active | M001/S03 | M001/S04 | mapped |
-| R006 | failure-visibility | active | M001/S03 | M001/S06 | mapped |
+| R005 | core-capability | validated | M001/S03 | M001/S04 | validated (S03 unified core + separate men/women artifacts) |
+| R006 | failure-visibility | validated | M001/S03 | M001/S06 | validated (S03 metrics_table + side_by_side_summary runtime contract) |
 | R007 | quality-attribute | active | M001/S04 | M001/S06 | mapped |
 | R008 | operability | active | M001/S05 | M001/S06 | mapped |
 | R009 | quality-attribute | active | M001/S05 | M002/S01 | mapped |
@@ -245,7 +245,7 @@ Guidelines:
 | R011 | continuity | active | M001/S06 | none | mapped |
 | R012 | integration | active | M001/S07 | M003/S01 | mapped |
 | R018 | failure-visibility | active | M001/S06 | M002/S01 | mapped |
-| R019 | constraint | active | M001/S03 | M001/S07 | mapped |
+| R019 | constraint | validated | M001/S03 | M001/S07 | validated (S03 notebook authority guardrail test) |
 | R013 | quality-attribute | deferred | M002/S02 | none | unmapped |
 | R014 | differentiator | deferred | M002/S01 | M002/S03 | unmapped |
 | R015 | core-capability | deferred | M003/S02 | none | unmapped |
@@ -254,7 +254,7 @@ Guidelines:
 
 ## Coverage Summary
 
-- Active requirements: 11
-- Mapped to slices: 11
-- Validated: 3
+- Active requirements: 7
+- Mapped to slices: 7
+- Validated: 7
 - Unmapped active requirements: 0

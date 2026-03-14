@@ -112,6 +112,27 @@ def _install_stubbed_stages(module, monkeypatch, failing_stage=None):
 
             def _ok(context, stage_name=stage):
                 seen.append(stage_name)
+                if stage_name == "train":
+                    return {
+                        "models": {"men": "models/men.pkl", "women": "models/women.pkl"},
+                        "metrics_by_split": {
+                            "men": {
+                                "Train": {"brier": 0.20, "logloss": 0.58, "auc": 0.72},
+                                "Val": {"brier": 0.21, "logloss": 0.60, "auc": 0.70},
+                                "Test": {"brier": 0.22, "logloss": 0.62, "auc": 0.68},
+                            },
+                            "women": {
+                                "Train": {"brier": 0.24, "logloss": 0.63, "auc": 0.66},
+                                "Val": {"brier": 0.25, "logloss": 0.65, "auc": 0.64},
+                                "Test": {"brier": 0.26, "logloss": 0.67, "auc": 0.62},
+                            },
+                        },
+                        "feature_snapshot": {
+                            "men": {"feature_columns": ["NetRtg_diff"], "feature_count": 1},
+                            "women": {"feature_columns": ["SeedNum_diff"], "feature_count": 1},
+                        },
+                        "best_iteration": {"men": 11, "women": 9},
+                    }
                 return {"stage": stage_name}
 
             handlers[stage] = _ok
@@ -145,6 +166,11 @@ def test_cli_writes_started_and_succeeded_events_with_contract_fields(tmp_path, 
     run_dir = _latest_run_dir(artifacts_root)
     metadata = json.loads((run_dir / "run_metadata.json").read_text(encoding="utf-8"))
     assert metadata["seed"] == 17, "CLI seed must propagate into run metadata"
+
+    train_payload = metadata["stage_outputs"]["train"]
+    assert {"metrics_by_split", "feature_snapshot", "models"}.issubset(train_payload.keys())
+    assert train_payload["metrics_by_split"]["men"]["Test"]["brier"] == pytest.approx(0.22)
+    assert train_payload["metrics_by_split"]["women"]["Test"]["brier"] == pytest.approx(0.26)
 
     events = _read_jsonl(run_dir / "stage_events.jsonl")
     _assert_event_contract(events)
