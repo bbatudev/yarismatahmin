@@ -10,7 +10,7 @@ Tek komutla çalışan, tek gerçeklik üreten, tekrar üretilebilir ve kararlar
 
 ## Current State
 
-Depoda feature engineering ve baseline LightGBM scriptleri mevcut (`mania_pipeline/scripts/02_feature_engineering.py`, `03_lgbm_train.py`). Men/Women işlenmiş feature dosyaları üretiliyor, split mantığı script içinde var, ancak notebook-script sapması riski ve canonical run contract eksikliği bulunuyor. Governance/ablation, regression gate ve formal reproducibility contract henüz sistematik değil.
+S01 tamamlandı: canonical orchestrator artık mevcut (`mania_pipeline/scripts/run_pipeline.py`) ve tek komutla `feature -> train -> eval_report -> artifact` zincirini run-scoped metadata/lifecycle event contract’ı ile çalıştırıyor. Run artifact yüzeyi (`mania_pipeline/artifacts/runs/<run_id>/run_metadata.json`, `stage_events.jsonl`, `eval_report.json`, `artifact_manifest.json`) stabilize edildi. Split/leakage gate, single execution path enforcement, calibration/governance ve reproducibility/regression gate katmanları hâlâ sonraki sliceların işi.
 
 ## Architecture / Key Patterns
 

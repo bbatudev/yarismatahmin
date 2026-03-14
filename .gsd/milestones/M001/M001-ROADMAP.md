@@ -49,7 +49,7 @@ This milestone is complete only when all are true:
 
 ## Slices
 
-- [ ] **S01: Canonical Run Orchestrator** `risk:medium` `depends:[]`
+- [x] **S01: Canonical Run Orchestrator** `risk:medium` `depends:[]`
   > After this: Tek komutla feature→train→eval→report→artifact zinciri tetiklenir.
 
 - [ ] **S02: Split/Leakage Contract Gates** `risk:high` `depends:[S01]`

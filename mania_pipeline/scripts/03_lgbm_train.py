@@ -29,7 +29,7 @@ def load_data(gender="M"):
 # ─────────────────────────────────────────────────────────
 # MODEL EĞİTİMİ (LIGHTGBM)
 # ─────────────────────────────────────────────────────────
-def train_baseline(df, gender="M"):
+def train_baseline(df, gender="M", random_state=42):
     tag = "Men" if gender == "M" else "Women"
     print(f"\n{'='*55}")
     print(f"  {tag.upper()} BASELINE MODEL EĞİTİMİ BAŞLIYOR")
@@ -70,7 +70,7 @@ def train_baseline(df, gender="M"):
         'min_child_samples': 20,
         'colsample_bytree': 0.8,
         'subsample': 0.8,
-        'random_state': 42,
+        'random_state': random_state,
         'n_estimators': 1000,
         'verbose': -1
     }
@@ -89,9 +89,9 @@ def train_baseline(df, gender="M"):
     # ─────────────────────────────────────────────────────────
     # DEĞERLENDİRME (BRIER SCORE & LOG LOSS)
     # ─────────────────────────────────────────────────────────
-    print(f"\n{'─'*45}")
-    print(f"PERFORMANS METRİKLERİ")
-    print(f"{'─'*45}")
+    print(f"\n{'-'*45}")
+    print("PERFORMANS METRİKLERİ")
+    print(f"{'-'*45}")
     
     probs_train = model.predict_proba(X_train)[:, 1]
     brier_train = brier_score(y_train, probs_train)

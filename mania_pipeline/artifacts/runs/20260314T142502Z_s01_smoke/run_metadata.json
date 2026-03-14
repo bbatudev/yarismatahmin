@@ -1,0 +1,46 @@
+{
+  "run_id": "20260314T142502Z_s01_smoke",
+  "seed": 42,
+  "git_commit": "1b98eeb",
+  "started_at": "2026-03-14T14:25:02.265156Z",
+  "command": "run_pipeline.py --seed 42 --run-label s01_smoke",
+  "cwd": "C:\\Users\\Gaming\\Desktop\\projects\\yarismatahmin",
+  "run_label": "s01_smoke",
+  "artifacts_root": "C:\\Users\\Gaming\\Desktop\\projects\\yarismatahmin\\mania_pipeline\\artifacts\\runs",
+  "run_dir": "C:\\Users\\Gaming\\Desktop\\projects\\yarismatahmin\\mania_pipeline\\artifacts\\runs\\20260314T142502Z_s01_smoke",
+  "status": "failed",
+  "finished_at": "2026-03-14T14:25:48.942022Z",
+  "duration_ms": 46663,
+  "failed_stage": "train",
+  "error": {
+    "type": "UnicodeEncodeError",
+    "message": "'charmap' codec can't encode characters in position 2-46: character maps to <undefined>",
+    "traceback": [
+      "Traceback (most recent call last):",
+      "  File \"C:\\Users\\Gaming\\Desktop\\projects\\yarismatahmin\\mania_pipeline\\scripts\\run_pipeline.py\", line 370, in main",
+      "    result = STAGE_HANDLERS[stage](context)",
+      "  File \"C:\\Users\\Gaming\\Desktop\\projects\\yarismatahmin\\mania_pipeline\\scripts\\run_pipeline.py\", line 237, in stage_train",
+      "    men_model, men_brier = train_module.train_baseline(men_df, \"M\", random_state=context[\"seed\"])",
+      "                           ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+      "  File \"C:\\Users\\Gaming\\Desktop\\projects\\yarismatahmin\\mania_pipeline\\scripts\\03_lgbm_train.py\", line 92, in train_baseline",
+      "    print(f\"\\n{'─'*45}\")",
+      "    ~~~~~^^^^^^^^^^^^^^^",
+      "  File \"C:\\Users\\Gaming\\AppData\\Local\\Programs\\Python\\Python313\\Lib\\encodings\\cp1254.py\", line 19, in encode",
+      "    return codecs.charmap_encode(input,self.errors,encoding_table)[0]",
+      "           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+      "UnicodeEncodeError: 'charmap' codec can't encode characters in position 2-46: character maps to <undefined>"
+    ]
+  },
+  "stage_outputs": {
+    "feature": {
+      "outputs": {
+        "men_features": "C:\\Users\\Gaming\\Desktop\\projects\\yarismatahmin\\mania_pipeline\\artifacts\\data\\processed_features_men.csv",
+        "women_features": "C:\\Users\\Gaming\\Desktop\\projects\\yarismatahmin\\mania_pipeline\\artifacts\\data\\processed_features_women.csv"
+      },
+      "rows": {
+        "men": 2898,
+        "women": 1922
+      }
+    }
+  }
+}

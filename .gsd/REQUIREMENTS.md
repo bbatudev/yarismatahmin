@@ -12,16 +12,6 @@ Guidelines:
 
 ## Active
 
-### R001 — Canonical end-to-end run command
-- Class: primary-user-loop
-- Status: active
-- Description: Tek komut feature → train → eval → report → artifact akışını uçtan uca çalıştırır.
-- Why it matters: Dağınık adımları ve insan kaynaklı hata riskini kaldırır.
-- Source: user
-- Primary owning slice: M001/S01
-- Supporting slices: M001/S06, M001/S07
-- Validation: mapped
-- Notes: Komut deterministic parametre seti kabul etmelidir.
 
 ### R002 — Deterministic walk-forward split standard
 - Class: quality-attribute
@@ -168,7 +158,16 @@ Guidelines:
 
 ## Validated
 
-Henüz validated requirement yok (bootstrap aşaması).
+### R001 — Canonical end-to-end run command
+- Class: primary-user-loop
+- Status: validated
+- Description: Tek komut feature → train → eval → report → artifact akışını uçtan uca çalıştırır.
+- Why it matters: Dağınık adımları ve insan kaynaklı hata riskini kaldırır.
+- Source: user
+- Primary owning slice: M001/S01
+- Supporting slices: M001/S06, M001/S07
+- Validation: validated by execution
+- Notes: `mania_pipeline/scripts/run_pipeline.py --seed 42 --run-label s01_smoke` gerçek veriyle koştu; run metadata + stage lifecycle contract doğrulandı.
 
 ## Deferred
 
@@ -233,7 +232,7 @@ Henüz validated requirement yok (bootstrap aşaması).
 
 | ID | Class | Status | Primary owner | Supporting | Proof |
 |---|---|---|---|---|---|
-| R001 | primary-user-loop | active | M001/S01 | M001/S06,S07 | mapped |
+| R001 | primary-user-loop | validated | M001/S01 | M001/S06,S07 | validated (S01 integration runtime + contract checks) |
 | R002 | quality-attribute | active | M001/S02 | M001/S03 | mapped |
 | R003 | continuity | active | M001/S03 | M001/S07 | mapped |
 | R004 | compliance/security | active | M001/S02 | M001/S07 | mapped |
@@ -255,7 +254,7 @@ Henüz validated requirement yok (bootstrap aşaması).
 
 ## Coverage Summary
 
-- Active requirements: 14
-- Mapped to slices: 14
-- Validated: 0
+- Active requirements: 13
+- Mapped to slices: 13
+- Validated: 1
 - Unmapped active requirements: 0
