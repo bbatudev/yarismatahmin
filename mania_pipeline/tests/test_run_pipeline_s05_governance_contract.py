@@ -134,7 +134,7 @@ def _build_context(tmp_path: Path) -> dict:
     }
 
 
-def test_stage_eval_report_emits_governance_ledger_contract(tmp_path):
+def test_stage_eval_report_emits_governance_ledger_and_ablation_contract(tmp_path):
     module = _load_module()
     context = _build_context(tmp_path)
 
@@ -142,7 +142,9 @@ def test_stage_eval_report_emits_governance_ledger_contract(tmp_path):
 
     governance_payload = result["governance"]
     ledger_path = Path(governance_payload["artifacts"]["ledger_csv"])
+    ablation_report_path = Path(governance_payload["artifacts"]["ablation_report_json"])
     assert ledger_path.exists()
+    assert ablation_report_path.exists()
 
     ledger = pd.read_csv(ledger_path)
     required_columns = {"feature", "group", "default_action", "evidence"}
@@ -152,6 +154,16 @@ def test_stage_eval_report_emits_governance_ledger_contract(tmp_path):
     women_rows = ledger[ledger["gender"] == "women"]
     assert "MasseyPct_diff" not in women_rows["feature"].tolist()
 
+    ablation_report = json.loads(ablation_report_path.read_text(encoding="utf-8"))
+    assert "groups" in ablation_report and isinstance(ablation_report["groups"], list)
+
+    summary = governance_payload["summary"]
+    assert {"selected_group_count", "executed_group_count", "skipped_groups"}.issubset(summary.keys())
+    assert isinstance(summary["skipped_groups"], list)
+    allowed_reasons = {"group_missing", "no_gender_features", "split_empty", "empty_high_prob_band"}
+    assert all(item.get("reason") in allowed_reasons for item in summary["skipped_groups"])
+
     eval_report_path = Path(result["eval_report"])
     eval_report = json.loads(eval_report_path.read_text(encoding="utf-8"))
     assert eval_report["governance"]["artifacts"]["ledger_csv"] == str(ledger_path)
+    assert eval_report["governance"]["artifacts"]["ablation_report_json"] == str(ablation_report_path)

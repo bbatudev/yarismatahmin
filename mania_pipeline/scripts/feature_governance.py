@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import math
-from collections import Counter
+from collections import Counter, defaultdict
 from typing import Any
 
 DEFAULT_ACTION_DOMAIN = ("keep", "drop", "candidate")
@@ -16,6 +16,15 @@ MEN_ONLY_FEATURES = {
     "ProgramAge_diff",
 }
 
+ABLATION_TARGET_SPLITS = ("Val", "Test")
+DEFAULT_MAX_ABLATION_GROUPS = 3
+ABLATION_ALLOWED_SKIP_REASONS = (
+    "group_missing",
+    "no_gender_features",
+    "split_empty",
+    "empty_high_prob_band",
+)
+
 
 def _as_float_or_none(value: Any) -> float | None:
     if isinstance(value, (int, float)):
@@ -23,6 +32,14 @@ def _as_float_or_none(value: Any) -> float | None:
         if math.isfinite(numeric):
             return numeric
     return None
+
+
+def _delta_or_none(*, current: Any, baseline: Any) -> float | None:
+    current_value = _as_float_or_none(current)
+    baseline_value = _as_float_or_none(baseline)
+    if current_value is None or baseline_value is None:
+        return None
+    return float(current_value - baseline_value)
 
 
 def infer_feature_group(feature_name: str) -> str:
@@ -194,4 +211,183 @@ def build_governance_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "row_count": int(len(rows)),
         "default_action_counts": default_action_counts,
         "group_counts": {group: int(count) for group, count in sorted(group_counter.items())},
+    }
+
+
+def _action_priority(action: Any) -> int:
+    if action == "drop":
+        return 2
+    if action == "candidate":
+        return 1
+    return 0
+
+
+def select_suspicious_groups(
+    rows: list[dict[str, Any]],
+    *,
+    max_groups: int = DEFAULT_MAX_ABLATION_GROUPS,
+) -> list[str]:
+    max_groups = max(1, int(max_groups))
+    score_by_group: Counter[str] = Counter()
+    size_by_group: Counter[str] = Counter()
+
+    for row in rows:
+        group = row.get("group")
+        if not isinstance(group, str) or not group:
+            continue
+        size_by_group[group] += 1
+        score_by_group[group] += _action_priority(row.get("default_action"))
+
+    ordered_groups = sorted(
+        size_by_group.keys(),
+        key=lambda group: (-score_by_group[group], -size_by_group[group], group),
+    )
+
+    selected = [group for group in ordered_groups if score_by_group[group] > 0][:max_groups]
+    if selected:
+        return selected
+    return ordered_groups[:max_groups]
+
+
+def build_group_gender_feature_map(rows: list[dict[str, Any]]) -> dict[str, dict[str, list[str]]]:
+    index: dict[str, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
+
+    for row in rows:
+        group = row.get("group")
+        gender = row.get("gender")
+        feature = row.get("feature")
+        if not isinstance(group, str) or not group:
+            continue
+        if not isinstance(gender, str) or not gender:
+            continue
+        if not isinstance(feature, str) or not feature:
+            continue
+        index[group][gender].add(feature)
+
+    result: dict[str, dict[str, list[str]]] = {}
+    for group in sorted(index.keys()):
+        result[group] = {}
+        for gender in sorted(index[group].keys()):
+            result[group][gender] = sorted(index[group][gender])
+    return result
+
+
+def _extract_high_prob_payload(split_payload: Any) -> dict[str, Any]:
+    if not isinstance(split_payload, dict):
+        return {}
+    high_prob = split_payload.get("high_prob_band")
+    if not isinstance(high_prob, dict):
+        return {}
+    return high_prob
+
+
+def _resolve_split_reason(*, baseline_calibration: Any, ablated_calibration: Any) -> str | None:
+    baseline_payload = baseline_calibration if isinstance(baseline_calibration, dict) else {}
+    ablated_payload = ablated_calibration if isinstance(ablated_calibration, dict) else {}
+
+    if baseline_payload.get("reason") == "split_empty" or ablated_payload.get("reason") == "split_empty":
+        return "split_empty"
+
+    baseline_high = _extract_high_prob_payload(baseline_payload)
+    ablated_high = _extract_high_prob_payload(ablated_payload)
+    if baseline_high.get("reason") == "empty_high_prob_band" or ablated_high.get("reason") == "empty_high_prob_band":
+        return "empty_high_prob_band"
+
+    return None
+
+
+def compute_ablation_split_deltas(
+    *,
+    baseline_metrics_by_split: dict[str, Any],
+    ablated_metrics_by_split: dict[str, Any],
+    baseline_calibration_by_split: dict[str, Any],
+    ablated_calibration_by_split: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    deltas: dict[str, dict[str, Any]] = {}
+
+    for split_label in ABLATION_TARGET_SPLITS:
+        baseline_metrics = baseline_metrics_by_split.get(split_label, {}) if isinstance(baseline_metrics_by_split, dict) else {}
+        ablated_metrics = ablated_metrics_by_split.get(split_label, {}) if isinstance(ablated_metrics_by_split, dict) else {}
+        baseline_calibration = (
+            baseline_calibration_by_split.get(split_label, {}) if isinstance(baseline_calibration_by_split, dict) else {}
+        )
+        ablated_calibration = (
+            ablated_calibration_by_split.get(split_label, {}) if isinstance(ablated_calibration_by_split, dict) else {}
+        )
+
+        baseline_high = _extract_high_prob_payload(baseline_calibration)
+        ablated_high = _extract_high_prob_payload(ablated_calibration)
+
+        split_reason = _resolve_split_reason(
+            baseline_calibration=baseline_calibration,
+            ablated_calibration=ablated_calibration,
+        )
+
+        deltas[split_label] = {
+            "delta_brier": _delta_or_none(
+                current=ablated_metrics.get("brier"),
+                baseline=baseline_metrics.get("brier"),
+            ),
+            "delta_logloss": _delta_or_none(
+                current=ablated_metrics.get("logloss"),
+                baseline=baseline_metrics.get("logloss"),
+            ),
+            "delta_auc": _delta_or_none(
+                current=ablated_metrics.get("auc"),
+                baseline=baseline_metrics.get("auc"),
+            ),
+            "delta_calibration": {
+                "delta_ece": _delta_or_none(
+                    current=ablated_calibration.get("ece") if isinstance(ablated_calibration, dict) else None,
+                    baseline=baseline_calibration.get("ece") if isinstance(baseline_calibration, dict) else None,
+                ),
+                "delta_wmae": _delta_or_none(
+                    current=ablated_calibration.get("wmae") if isinstance(ablated_calibration, dict) else None,
+                    baseline=baseline_calibration.get("wmae") if isinstance(baseline_calibration, dict) else None,
+                ),
+                "delta_high_prob_gap": _delta_or_none(
+                    current=ablated_high.get("gap"),
+                    baseline=baseline_high.get("gap"),
+                ),
+                "baseline_high_prob_reason": baseline_high.get("reason"),
+                "ablated_high_prob_reason": ablated_high.get("reason"),
+            },
+            "reason": split_reason,
+        }
+
+    return deltas
+
+
+def normalize_skip_reason(reason: Any) -> str:
+    if isinstance(reason, str) and reason in ABLATION_ALLOWED_SKIP_REASONS:
+        return reason
+    return "no_gender_features"
+
+
+def build_ablation_summary(
+    *,
+    selected_groups: list[str],
+    ablation_groups: list[dict[str, Any]],
+) -> dict[str, Any]:
+    executed_group_count = 0
+    skipped_groups: list[dict[str, str]] = []
+
+    for group_payload in ablation_groups:
+        status = group_payload.get("status")
+        group_name = group_payload.get("group")
+        if status == "executed":
+            executed_group_count += 1
+            continue
+
+        skipped_groups.append(
+            {
+                "group": str(group_name),
+                "reason": normalize_skip_reason(group_payload.get("reason")),
+            }
+        )
+
+    return {
+        "selected_group_count": int(len(selected_groups)),
+        "executed_group_count": int(executed_group_count),
+        "skipped_groups": skipped_groups,
     }

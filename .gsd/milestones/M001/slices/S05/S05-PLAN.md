@@ -45,14 +45,14 @@
   - Verify: `./venv/Scripts/python -m pytest mania_pipeline/tests/test_feature_governance_ledger.py`
   - Done when: Ledger her feature için `feature/group/default_action/evidence` alanlarıyla üretiliyor ve default_action yalnızca `keep|drop|candidate` değerlerini alıyor.
 
-- [ ] **T02: Implement controlled ablation retrain and delta report schema** `est:1h30m`
+- [x] **T02: Implement controlled ablation retrain and delta report schema** `est:1h30m`
   - Why: R009 çoklu delil gerektiriyor; baseline metrik tek başına karar üretemez, şüpheli grup için subset retrain delta’sı şart.
   - Files: `mania_pipeline/scripts/feature_governance.py`, `mania_pipeline/scripts/run_pipeline.py`, `mania_pipeline/tests/test_feature_governance_ablation.py`, `mania_pipeline/tests/test_run_pipeline_s05_governance_contract.py`, `mania_pipeline/scripts/03_lgbm_train.py`
   - Do: Suspicious group seçim kuralını deterministic tanımla (seed + cap); grup bazlı kolon düşürüp `train_baseline(..., random_state=seed)` ile yeniden eğit; Val/Test için ΔBrier/ΔLogLoss/ΔAUC + ΔCalibration (ECE/W-MAE/high-prob gap) hesaplayıp `ablation_report.json` şemasını doldur.
   - Verify: `./venv/Scripts/python -m pytest mania_pipeline/tests/test_feature_governance_ablation.py`
   - Done when: `ablation_report.json` her çalıştırılan grup için required delta metriklerini içeriyor; çalıştırılamayan gruplar reason-code ile açıkça işaretleniyor.
 
-- [ ] **T03: Wire governance artifacts into eval report + metadata and prove runtime contract** `est:1h`
+- [x] **T03: Wire governance artifacts into eval report + metadata and prove runtime contract** `est:1h`
   - Why: Slice demo yalnızca artifact üretmek değil; canonical run tüketicilerinin (`eval_report`, `stage_outputs`) bu yüzeyi stabil görmesi gerekiyor.
   - Files: `mania_pipeline/scripts/run_pipeline.py`, `mania_pipeline/tests/test_run_pipeline_s05_governance_contract.py`, `mania_pipeline/tests/test_run_pipeline_cli.py`, `mania_pipeline/tests/test_run_pipeline_s04_calibration_contract.py`, `mania_pipeline/artifacts/runs/<run_id>/eval_report.json`, `mania_pipeline/artifacts/runs/<run_id>/run_metadata.json`
   - Do: `stage_eval_report` çıkışına `governance` payload’ı (artifact path + summary + diagnostics) ekle; mevcut calibration contract’ını bozmadan JSON yapısını genişlet; topology-lock testini koruyup yeni contract assertion testlerini ekle; canonical smoke run ve script assert ile artifact varlığını doğrula.

@@ -592,6 +592,7 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
     calibration_rows: list[dict[str, Any]] = []
     calibration_summary: dict[str, dict[str, Any]] = {"men": {}, "women": {}}
     governance_importances: dict[str, list[float] | None] = {"men": None, "women": None}
+    feature_frames_by_gender: dict[str, pd.DataFrame] = {}
 
     for gender_key in ("men", "women"):
         gender_payload = genders_payload.get(gender_key)
@@ -643,6 +644,8 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
         missing_required = sorted(required_columns - set(feature_df.columns))
         if missing_required:
             raise RuntimeError(f"[{gender_key}] feature file missing required columns: {missing_required}")
+
+        feature_frames_by_gender[gender_key] = feature_df
 
         for split_label in CANONICAL_SPLITS:
             split_df = feature_df[feature_df["Split"] == split_label].copy()
@@ -715,11 +718,204 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
     governance_df.to_csv(governance_ledger_path, index=False)
 
     governance_summary = governance_module.build_governance_summary(governance_rows)
+
+    selected_groups = governance_module.select_suspicious_groups(governance_rows)
+    group_gender_feature_map = governance_module.build_group_gender_feature_map(governance_rows)
+
+    train_module = _load_script_module("03_lgbm_train.py", "lgbm_train_ablation_stage")
+    train_module.DATA_DIR = str(PIPELINE_DIR / "artifacts" / "data")
+    train_module.OUT_DIR = str(PIPELINE_DIR / "artifacts" / "models")
+
+    drop_columns = set(getattr(train_module, "DROP_COLUMNS", ("Season", "TeamA", "TeamB", "Target", "Split")))
+    ablation_groups: list[dict[str, Any]] = []
+
+    for group_name in selected_groups:
+        group_payload: dict[str, Any] = {
+            "group": group_name,
+            "status": "skipped",
+            "reason": "group_missing",
+            "gender_results": {},
+        }
+
+        per_gender_features = group_gender_feature_map.get(group_name, {})
+        if not isinstance(per_gender_features, dict) or not per_gender_features:
+            ablation_groups.append(group_payload)
+            continue
+
+        group_executed = False
+        group_reason_candidates: list[str] = []
+
+        for gender_key in ("men", "women"):
+            dropped_features = sorted(per_gender_features.get(gender_key, []))
+            gender_result: dict[str, Any] = {
+                "status": "skipped",
+                "reason": "no_gender_features",
+                "dropped_features": dropped_features,
+                "split_deltas": {},
+            }
+
+            if not dropped_features:
+                group_reason_candidates.append("no_gender_features")
+                group_payload["gender_results"][gender_key] = gender_result
+                continue
+
+            base_frame = feature_frames_by_gender.get(gender_key)
+            if base_frame is None:
+                group_reason_candidates.append("group_missing")
+                gender_result["reason"] = "group_missing"
+                group_payload["gender_results"][gender_key] = gender_result
+                continue
+
+            ablated_df = base_frame.drop(columns=dropped_features, errors="ignore")
+            remaining_features = [column for column in ablated_df.columns if column not in drop_columns]
+            if not remaining_features:
+                group_reason_candidates.append("no_gender_features")
+                gender_result["reason"] = "no_gender_features"
+                group_payload["gender_results"][gender_key] = gender_result
+                continue
+
+            gender_label = "M" if gender_key == "men" else "W"
+            try:
+                ablated_model, ablated_payload = train_module.train_baseline(
+                    ablated_df,
+                    gender_label,
+                    random_state=context["seed"],
+                )
+            except Exception as exc:
+                message = str(exc).lower()
+                reason = "split_empty" if "empty" in message or "boş" in message else "no_gender_features"
+                reason = governance_module.normalize_skip_reason(reason)
+                group_reason_candidates.append(reason)
+                gender_result["reason"] = reason
+                gender_result["error"] = str(exc)
+                group_payload["gender_results"][gender_key] = gender_result
+                continue
+
+            ablated_snapshot = ablated_payload.get("feature_snapshot", {})
+            ablated_feature_columns = ablated_snapshot.get("feature_columns") if isinstance(ablated_snapshot, dict) else None
+            if not isinstance(ablated_feature_columns, list) or not ablated_feature_columns:
+                group_reason_candidates.append("no_gender_features")
+                gender_result["reason"] = "no_gender_features"
+                group_payload["gender_results"][gender_key] = gender_result
+                continue
+
+            missing_ablated_columns = [col for col in ablated_feature_columns if col not in ablated_df.columns]
+            if missing_ablated_columns:
+                group_reason_candidates.append("group_missing")
+                gender_result["reason"] = "group_missing"
+                gender_result["missing_columns"] = missing_ablated_columns
+                group_payload["gender_results"][gender_key] = gender_result
+                continue
+
+            ablated_calibration_by_split: dict[str, Any] = {}
+            for split_label in CANONICAL_SPLITS:
+                split_df = ablated_df[ablated_df["Split"] == split_label].copy()
+                if split_df.empty:
+                    split_true = np.asarray([], dtype=float)
+                    split_prob = np.asarray([], dtype=float)
+                else:
+                    split_features = split_df.loc[:, ablated_feature_columns]
+                    split_true = split_df["Target"].to_numpy(dtype=float)
+                    try:
+                        raw_probs = ablated_model.predict_proba(split_features)
+                    except Exception as exc:
+                        raise RuntimeError(
+                            f"[{gender_key}] ablation predict_proba failed for group={group_name} split={split_label}: {exc}"
+                        ) from exc
+                    split_prob = _extract_positive_class_probabilities(
+                        raw_probs,
+                        gender_key=gender_key,
+                        split_label=split_label,
+                    )
+
+                _, split_summary = _build_calibration_rows_and_summary(
+                    gender_key=gender_key,
+                    split_label=split_label,
+                    y_true=split_true,
+                    y_prob=split_prob,
+                )
+                ablated_calibration_by_split[split_label] = split_summary
+
+            baseline_payload = genders_payload.get(gender_key, {})
+            baseline_metrics = baseline_payload.get("metrics_by_split", {}) if isinstance(baseline_payload, dict) else {}
+            baseline_calibration = calibration_summary.get(gender_key, {})
+            ablated_metrics = ablated_payload.get("metrics_by_split", {})
+
+            split_deltas = governance_module.compute_ablation_split_deltas(
+                baseline_metrics_by_split=baseline_metrics,
+                ablated_metrics_by_split=ablated_metrics,
+                baseline_calibration_by_split=baseline_calibration,
+                ablated_calibration_by_split=ablated_calibration_by_split,
+            )
+
+            has_executable_signal = any(
+                split_payload.get("delta_brier") is not None
+                or split_payload.get("delta_logloss") is not None
+                or split_payload.get("delta_auc") is not None
+                for split_payload in split_deltas.values()
+            )
+
+            if not has_executable_signal:
+                split_reason = next(
+                    (
+                        split_payload.get("reason")
+                        for split_payload in split_deltas.values()
+                        if split_payload.get("reason") is not None
+                    ),
+                    "no_gender_features",
+                )
+                normalized_reason = governance_module.normalize_skip_reason(split_reason)
+                group_reason_candidates.append(normalized_reason)
+                gender_result["reason"] = normalized_reason
+            else:
+                group_executed = True
+                gender_result["status"] = "executed"
+                gender_result["reason"] = None
+
+            gender_result["split_deltas"] = split_deltas
+            baseline_feature_columns = [column for column in base_frame.columns if column not in drop_columns]
+            gender_result["baseline_feature_count"] = int(len(baseline_feature_columns))
+            gender_result["ablated_feature_count"] = int(len(ablated_feature_columns))
+            group_payload["gender_results"][gender_key] = gender_result
+
+        if group_executed:
+            group_payload["status"] = "executed"
+            group_payload["reason"] = None
+        else:
+            fallback_reason = group_reason_candidates[0] if group_reason_candidates else "group_missing"
+            group_payload["reason"] = governance_module.normalize_skip_reason(fallback_reason)
+
+        ablation_groups.append(group_payload)
+
+    ablation_report_payload = {
+        "run_id": context["run_id"],
+        "seed": context["seed"],
+        "generated_at": _now_utc_iso(),
+        "config": {
+            "target_splits": list(governance_module.ABLATION_TARGET_SPLITS),
+            "max_groups": int(getattr(governance_module, "DEFAULT_MAX_ABLATION_GROUPS", len(selected_groups))),
+            "selected_groups": selected_groups,
+        },
+        "groups": ablation_groups,
+    }
+    ablation_report_path = Path(context["run_dir"]) / "ablation_report.json"
+    _write_json(ablation_report_path, ablation_report_payload)
+
+    ablation_summary = governance_module.build_ablation_summary(
+        selected_groups=selected_groups,
+        ablation_groups=ablation_groups,
+    )
+    governance_summary.update(ablation_summary)
+
     governance_payload = {
         "artifacts": {
             "ledger_csv": str(governance_ledger_path),
+            "ablation_report_json": str(ablation_report_path),
         },
         "summary": governance_summary,
+        "diagnostics": {
+            "selected_groups": selected_groups,
+        },
     }
 
     report_payload = {

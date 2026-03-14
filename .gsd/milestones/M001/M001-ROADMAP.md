@@ -61,7 +61,7 @@ This milestone is complete only when all are true:
 - [x] **S04: Calibration Layer + Overconfidence/Drift Reporting** `risk:high` `depends:[S03]`
   > After this: calibration bins + ECE/W-MAE + üst olasılık bin sapma özeti çıkar.
 
-- [ ] **S05: Feature Governance + Controlled Ablation** `risk:medium` `depends:[S03]`
+- [x] **S05: Feature Governance + Controlled Ablation** `risk:medium` `depends:[S03]`
   > After this: keep/drop/candidate + `default_action` ve ablation delta raporu otomatik oluşur.
 
 - [ ] **S06: Artifact Contract + Reproducibility + Regression Gate** `risk:high` `depends:[S04,S05]`

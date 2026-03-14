@@ -13,28 +13,6 @@ Guidelines:
 ## Active
 
 
-### R008 — Feature governance ledger
-- Class: operability
-- Status: active
-- Description: Her run sonunda feature’lar keep/drop/candidate olarak sınıflanır.
-- Why it matters: Feature kararlarını geri izlenebilir ve tutarlı kılar.
-- Source: user
-- Primary owning slice: M001/S05
-- Supporting slices: M001/S06
-- Validation: mapped
-- Notes: Rapor satırında zorunlu `default_action` alanı bulunur.
-
-### R009 — Controlled ablation reporting
-- Class: quality-attribute
-- Status: active
-- Description: Şüpheli feature grupları için ablation etkisi (delta Brier/LogLoss/AUC/Calibration) standart raporlanır.
-- Why it matters: Zayıf lineer korelasyonlu ama non-linear faydalı sinyallerin yanlış silinmesini engeller.
-- Source: user
-- Primary owning slice: M001/S05
-- Supporting slices: M002/S01 (provisional)
-- Validation: mapped
-- Notes: Karar, tek metrikten değil çoklu delilden çıkarılır.
-
 ### R010 — Artifact contract
 - Class: launchability
 - Status: active
@@ -158,6 +136,28 @@ Guidelines:
 - Validation: validated by execution
 - Notes: S04 canonical run (`20260314T161222Z_s04_calibration_smoke`) ile `calibration_bins.csv` + `calibration_report.json` artifact’ları, `eval_report.json.calibration` wiring’i ve empty-band diagnostics sözleşmesi doğrulandı.
 
+### R008 — Feature governance ledger
+- Class: operability
+- Status: validated
+- Description: Her run sonunda feature’lar keep/drop/candidate olarak sınıflanır.
+- Why it matters: Feature kararlarını geri izlenebilir ve tutarlı kılar.
+- Source: user
+- Primary owning slice: M001/S05
+- Supporting slices: M001/S06
+- Validation: validated by execution
+- Notes: S05 canonical run (`20260314T210035Z_s05_governance_smoke`) ile `governance_ledger.csv` artifact’ı ve `eval_report/run_metadata` governance wiring’i doğrulandı.
+
+### R009 — Controlled ablation reporting
+- Class: quality-attribute
+- Status: validated
+- Description: Şüpheli feature grupları için ablation etkisi (delta Brier/LogLoss/AUC/Calibration) standart raporlanır.
+- Why it matters: Zayıf lineer korelasyonlu ama non-linear faydalı sinyallerin yanlış silinmesini engeller.
+- Source: user
+- Primary owning slice: M001/S05
+- Supporting slices: M002/S01 (provisional)
+- Validation: validated by execution
+- Notes: S05 canonical run’da `ablation_report.json`, `executed_group_count` ve reason-coded `skipped_groups` contract yüzeyleri runtime assertion’larla doğrulandı.
+
 ### R019 — Single execution path enforcement
 - Class: constraint
 - Status: validated
@@ -239,8 +239,8 @@ Guidelines:
 | R005 | core-capability | validated | M001/S03 | M001/S04 | validated (S03 unified core + separate men/women artifacts) |
 | R006 | failure-visibility | validated | M001/S03 | M001/S06 | validated (S03 metrics_table + side_by_side_summary runtime contract) |
 | R007 | quality-attribute | validated | M001/S04 | M001/S06 | validated (S04 calibration contract tests + canonical smoke run artifacts and eval wiring checks) |
-| R008 | operability | active | M001/S05 | M001/S06 | mapped |
-| R009 | quality-attribute | active | M001/S05 | M002/S01 | mapped |
+| R008 | operability | validated | M001/S05 | M001/S06 | validated (S05 governance ledger contract test + canonical smoke run metadata/eval wiring checks) |
+| R009 | quality-attribute | validated | M001/S05 | M002/S01 | validated (S05 ablation delta contract tests + canonical smoke run artifact assertions) |
 | R010 | launchability | active | M001/S06 | M001/S07 | mapped |
 | R011 | continuity | active | M001/S06 | none | mapped |
 | R012 | integration | active | M001/S07 | M003/S01 | mapped |
@@ -254,7 +254,7 @@ Guidelines:
 
 ## Coverage Summary
 
-- Active requirements: 6
-- Mapped to slices: 6
-- Validated: 8
+- Active requirements: 4
+- Mapped to slices: 4
+- Validated: 10
 - Unmapped active requirements: 0
