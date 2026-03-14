@@ -53,7 +53,7 @@ This milestone is complete only when all are true:
 - [x] **S02: Reproducible HPO Search Harness** `risk:high` `depends:[S01]`
   > After this: HPO adayları ve kazanan konfigürasyon `hpo_report.json` ile izlenebilir olur.
 
-- [ ] **S03: Ensemble Candidate Integration** `risk:medium` `depends:[S02]`
+- [x] **S03: Ensemble Candidate Integration** `risk:medium` `depends:[S02]`
   > After this: baseline vs ensemble kalite karşılaştırması ve seçim sinyali canonical eval yüzeyine bağlanır.
 
 - [ ] **S04: Submission Readiness Final Gate** `risk:medium` `depends:[S03]`

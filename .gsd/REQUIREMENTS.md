@@ -12,17 +12,6 @@ Guidelines:
 
 ## Active
 
-### R015 — Ensemble layer beyond baseline LGBM
-- Class: core-capability
-- Status: active
-- Description: Birden çok modelin weighted/stacked kombinasyonu.
-- Why it matters: Tek model kırılganlığını azaltabilir.
-- Source: inferred
-- Primary owning slice: M003/S03
-- Supporting slices: M003/S02,S04
-- Validation: mapped
-- Notes: S02 HPO harness çıktıları S03 ensemble candidate seçimi için hazır.
-
 ## Validated
 
 ### R001 — Canonical end-to-end run command
@@ -201,6 +190,17 @@ Guidelines:
 - Validation: validated by execution
 - Notes: S02’de deterministic HPO trial harness (`--hpo-trials`, `hpo_report.json`, `stage_outputs.train.hpo`) test-suite ve `m003_s02_hpo_smoke` runtime proof ile doğrulandı.
 
+### R015 — Ensemble layer beyond baseline LGBM
+- Class: core-capability
+- Status: validated
+- Description: Birden çok modelin weighted/stacked kombinasyonu.
+- Why it matters: Tek model kırılganlığını azaltabilir.
+- Source: inferred
+- Primary owning slice: M003/S03
+- Supporting slices: M003/S02
+- Validation: validated by execution
+- Notes: S03’te `ensemble_report.json` + `stage_outputs.eval_report.ensemble` contract’ı test-suite ve `m003_s03_ensemble_smoke` runtime proof ile doğrulandı.
+
 ## Deferred
 
 ## Out of Scope
@@ -247,13 +247,13 @@ Guidelines:
 | R018 | failure-visibility | validated | M001/S06 | M002/S01,S03,S04 | validated (S06 regression gate report + S04 policy-gated fallback diagnostics) |
 | R019 | constraint | validated | M001/S03 | M001/S07 | validated (S03 notebook authority guardrail test) |
 | R013 | quality-attribute | validated | M003/S02 | M003/S01 | validated (S02 deterministic HPO report contract + canonical smoke proof) |
-| R015 | core-capability | active | M003/S03 | M003/S02,S04 | mapped |
+| R015 | core-capability | validated | M003/S03 | M003/S02 | validated (S03 ensemble report contract + canonical smoke proof) |
 | R016 | anti-feature | out-of-scope | none | none | n/a |
 | R017 | anti-feature | out-of-scope | none | none | n/a |
 
 ## Coverage Summary
 
-- Active requirements: 1
-- Mapped to slices: 1
-- Validated: 16
+- Active requirements: 0
+- Mapped to slices: 0
+- Validated: 17
 - Unmapped active requirements: 0
