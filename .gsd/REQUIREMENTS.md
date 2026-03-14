@@ -144,9 +144,9 @@ Guidelines:
 - Why it matters: Sessiz kalite düşüşlerini engeller.
 - Source: user
 - Primary owning slice: M001/S06
-- Supporting slices: M002/S01 (provisional)
+- Supporting slices: M002/S01, M002/S03
 - Validation: validated by execution
-- Notes: S06 ile `regression_gate_report.json` Brier mandatory + calibration degradation fail + AUC informational policy’sini enforce eder.
+- Notes: S06 ile `regression_gate_report.json` Brier mandatory + calibration degradation fail + AUC informational policy’sini enforce eder; S03 ile `governance_decision_report.json` gate coupling için decision evidence yüzeyini hazırlar.
 
 ### R012 — Optional submission generation and validation
 - Class: integration
@@ -246,7 +246,7 @@ Guidelines:
 | R011 | continuity | validated | M001/S06 | none | validated (S06 reproducibility report with same commit+seed tolerance pass/fail enforcement) |
 | R012 | integration | validated | M001/S07 | M003/S01 | validated (S07 submission stage runtime proof + strict `ID,Pred` validation report checks) |
 | R014 | differentiator | validated | M002/S02 | M002/S01,S03 | validated (S02 policy report contract + canonical smoke proof) |
-| R018 | failure-visibility | validated | M001/S06 | M002/S01 | validated (S06 regression gate report with blocking/non-blocking policy and runtime enforcement) |
+| R018 | failure-visibility | validated | M001/S06 | M002/S01,S03 | validated (S06 regression gate report with blocking/non-blocking policy and runtime enforcement) |
 | R019 | constraint | validated | M001/S03 | M001/S07 | validated (S03 notebook authority guardrail test) |
 | R013 | quality-attribute | deferred | M002/S02 | none | unmapped |
 | R015 | core-capability | deferred | M003/S02 | none | unmapped |

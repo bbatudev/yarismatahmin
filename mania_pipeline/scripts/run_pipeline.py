@@ -1267,6 +1267,177 @@ def _build_calibration_policy_for_gender(
     }
 
 
+def _build_governance_decision_for_gender(
+    *,
+    gender_key: str,
+    ablation_groups: list[dict[str, Any]],
+    drift_payload: dict[str, Any],
+    calibration_policy_payload: dict[str, Any],
+) -> dict[str, Any]:
+    improving_groups: list[dict[str, Any]] = []
+    degrading_groups: list[dict[str, Any]] = []
+    executed_group_count = 0
+
+    for group_payload in ablation_groups:
+        if not isinstance(group_payload, dict) or group_payload.get("status") != "executed":
+            continue
+
+        gender_result = group_payload.get("gender_results", {}).get(gender_key, {})
+        if not isinstance(gender_result, dict) or gender_result.get("status") != "executed":
+            continue
+
+        executed_group_count += 1
+        split_deltas = gender_result.get("split_deltas", {})
+        test_payload = split_deltas.get("Test", {}) if isinstance(split_deltas, dict) else {}
+        delta_brier = _as_float_or_none(test_payload.get("delta_brier"))
+        if delta_brier is None:
+            continue
+
+        evidence_row = {
+            "group": group_payload.get("group"),
+            "delta_brier_test": float(delta_brier),
+        }
+        if delta_brier < -0.001:
+            improving_groups.append(evidence_row)
+        elif delta_brier > 0.001:
+            degrading_groups.append(evidence_row)
+
+    drift_by_gender = drift_payload.get("by_gender", {}) if isinstance(drift_payload.get("by_gender", {}), dict) else {}
+    gender_drift = drift_by_gender.get(gender_key, {}) if isinstance(drift_by_gender.get(gender_key, {}), dict) else {}
+    drift_splits = gender_drift.get("splits", {}) if isinstance(gender_drift.get("splits", {}), dict) else {}
+    test_split = drift_splits.get("Test", {}) if isinstance(drift_splits.get("Test", {}), dict) else {}
+    test_gap = _as_float_or_none(test_split.get("gap"))
+
+    drift_alerts = [
+        alert
+        for alert in (drift_payload.get("alerts", []) if isinstance(drift_payload.get("alerts", []), list) else [])
+        if isinstance(alert, dict) and alert.get("gender") == gender_key
+    ]
+    drift_alert_codes = sorted({str(alert.get("code")) for alert in drift_alerts if alert.get("code") is not None})
+
+    policy_by_gender = (
+        calibration_policy_payload.get("by_gender", {})
+        if isinstance(calibration_policy_payload.get("by_gender", {}), dict)
+        else {}
+    )
+    policy_entry = policy_by_gender.get(gender_key, {}) if isinstance(policy_by_gender.get(gender_key, {}), dict) else {}
+    selected_method = str(policy_entry.get("selected_method", "none"))
+    default_method = str(policy_entry.get("default_method", "none"))
+    candidate_methods = (
+        policy_entry.get("candidate_methods", {}) if isinstance(policy_entry.get("candidate_methods", {}), dict) else {}
+    )
+    selected_test_payload = (
+        candidate_methods.get(selected_method, {}).get("test", {})
+        if isinstance(candidate_methods.get(selected_method, {}), dict)
+        else {}
+    )
+    none_test_payload = candidate_methods.get("none", {}).get("test", {}) if isinstance(candidate_methods.get("none", {}), dict) else {}
+    selected_test_brier = _as_float_or_none(selected_test_payload.get("brier"))
+    none_test_brier = _as_float_or_none(none_test_payload.get("brier"))
+
+    calibration_improvement = None
+    if selected_test_brier is not None and none_test_brier is not None:
+        calibration_improvement = float(none_test_brier - selected_test_brier)
+
+    reason_codes: list[str] = []
+    if improving_groups:
+        reason_codes.append("ablation_improves_when_group_removed")
+    if degrading_groups:
+        reason_codes.append("ablation_degrades_when_group_removed")
+    if drift_alert_codes:
+        reason_codes.append("drift_alert_present")
+    if selected_method != default_method:
+        reason_codes.append("non_default_calibration_selected")
+    if calibration_improvement is not None and calibration_improvement > 0:
+        reason_codes.append("calibration_improvement_positive")
+
+    if len(improving_groups) > len(degrading_groups) and improving_groups:
+        decision = "tighten_features"
+    elif drift_alert_codes and selected_method == "none":
+        decision = "monitor_drift"
+    elif selected_method != "none":
+        decision = "apply_calibration_policy"
+    else:
+        decision = "hold_baseline"
+
+    confidence = 0.45
+    confidence += min(executed_group_count, 3) * 0.08
+    confidence += min(len(reason_codes), 3) * 0.06
+    if decision == "hold_baseline":
+        confidence -= 0.05
+    confidence = float(max(0.1, min(0.95, confidence)))
+
+    return {
+        "decision": decision,
+        "confidence": confidence,
+        "reason_codes": reason_codes,
+        "evidence_bundle": {
+            "ablation": {
+                "executed_group_count": executed_group_count,
+                "improving_drop_groups": improving_groups,
+                "degrading_drop_groups": degrading_groups,
+            },
+            "drift": {
+                "alert_codes": drift_alert_codes,
+                "test_gap": test_gap,
+            },
+            "calibration_policy": {
+                "selected_method": selected_method,
+                "default_method": default_method,
+                "test_brier_improvement_vs_none": calibration_improvement,
+            },
+        },
+    }
+
+
+def _build_governance_decision_report(
+    *,
+    context: dict[str, Any],
+    ablation_groups: list[dict[str, Any]],
+    drift_payload: dict[str, Any],
+    calibration_policy_payload: dict[str, Any],
+) -> dict[str, Any]:
+    by_gender = {
+        gender_key: _build_governance_decision_for_gender(
+            gender_key=gender_key,
+            ablation_groups=ablation_groups,
+            drift_payload=drift_payload,
+            calibration_policy_payload=calibration_policy_payload,
+        )
+        for gender_key in ("men", "women")
+    }
+
+    aggregate_reasons = sorted(
+        {
+            reason
+            for payload in by_gender.values()
+            if isinstance(payload, dict)
+            for reason in (payload.get("reason_codes") if isinstance(payload.get("reason_codes"), list) else [])
+        }
+    )
+
+    decisions = {gender_key: payload.get("decision") for gender_key, payload in by_gender.items()}
+    if "tighten_features" in decisions.values():
+        aggregate_decision = "review_feature_groups"
+    elif "apply_calibration_policy" in decisions.values():
+        aggregate_decision = "enforce_calibration_policy"
+    elif "monitor_drift" in decisions.values():
+        aggregate_decision = "monitor_drift"
+    else:
+        aggregate_decision = "hold_baseline"
+
+    return {
+        "run_id": context["run_id"],
+        "seed": context["seed"],
+        "generated_at": _now_utc_iso(),
+        "by_gender": by_gender,
+        "aggregate": {
+            "decision": aggregate_decision,
+            "reason_codes": aggregate_reasons,
+        },
+    }
+
+
 def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
     train_result = context.get("stage_outputs", {}).get("train", {})
     metrics_by_split = train_result.get("metrics_by_split", {})
@@ -1737,6 +1908,21 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
         },
     }
 
+    governance_decision_report_payload = _build_governance_decision_report(
+        context=context,
+        ablation_groups=ablation_groups,
+        drift_payload=drift_payload,
+        calibration_policy_payload=calibration_policy_payload,
+    )
+    governance_decision_report_path = Path(context["run_dir"]) / "governance_decision_report.json"
+    _write_json(governance_decision_report_path, governance_decision_report_payload)
+
+    governance_decision_payload = {
+        "report_json": str(governance_decision_report_path),
+        "by_gender": governance_decision_report_payload["by_gender"],
+        "aggregate": governance_decision_report_payload["aggregate"],
+    }
+
     report_payload = {
         "run_id": context["run_id"],
         "seed": context["seed"],
@@ -1749,6 +1935,7 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
         "drift": drift_payload,
         "calibration_policy": calibration_policy_payload,
         "governance": governance_payload,
+        "governance_decision": governance_decision_payload,
     }
 
     report_path = Path(context["run_dir"]) / "eval_report.json"
@@ -1760,6 +1947,7 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
         "drift": drift_payload,
         "calibration_policy": calibration_policy_payload,
         "governance": governance_payload,
+        "governance_decision": governance_decision_payload,
     }
 
 
@@ -1775,6 +1963,11 @@ def stage_artifact(context: dict[str, Any]) -> dict[str, Any]:
         eval_output.get("calibration_policy", {}) if isinstance(eval_output.get("calibration_policy", {}), dict) else {}
     )
     governance_output = eval_output.get("governance", {}) if isinstance(eval_output.get("governance", {}), dict) else {}
+    governance_decision_output = (
+        eval_output.get("governance_decision", {})
+        if isinstance(eval_output.get("governance_decision", {}), dict)
+        else {}
+    )
     governance_artifacts = (
         governance_output.get("artifacts", {}) if isinstance(governance_output.get("artifacts", {}), dict) else {}
     )
@@ -1790,6 +1983,7 @@ def stage_artifact(context: dict[str, Any]) -> dict[str, Any]:
         "calibration_policy_report_json": calibration_policy_output.get("report_json"),
         "governance_ledger_csv": governance_artifacts.get("ledger_csv"),
         "ablation_report_json": governance_artifacts.get("ablation_report_json"),
+        "governance_decision_report_json": governance_decision_output.get("report_json"),
         "men_model_pkl": train_genders.get("men", {}).get("model_path") if isinstance(train_genders.get("men", {}), dict) else None,
         "women_model_pkl": train_genders.get("women", {}).get("model_path") if isinstance(train_genders.get("women", {}), dict) else None,
         "men_features_csv": feature_output.get("outputs", {}).get("men_features") if isinstance(feature_output.get("outputs", {}), dict) else None,

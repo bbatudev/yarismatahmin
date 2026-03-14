@@ -74,6 +74,7 @@ def _build_context(tmp_path: Path, *, run_id: str, seed: int, git_commit: str, m
     drift_report = _write_json(run_dir / "drift_regime_report.json", {"ok": True})
     calibration_policy_report = _write_json(run_dir / "calibration_policy_report.json", {"ok": True})
     governance_ledger = _write_text(run_dir / "governance_ledger.csv", "feature,group\n")
+    governance_decision_report = _write_json(run_dir / "governance_decision_report.json", {"ok": True})
     ablation_report = _write_json(run_dir / "ablation_report.json", {"ok": True})
 
     stage_outputs = {
@@ -129,6 +130,14 @@ def _build_context(tmp_path: Path, *, run_id: str, seed: int, git_commit: str, m
                     "executed_group_count": 1,
                     "skipped_groups": [],
                 },
+            },
+            "governance_decision": {
+                "report_json": str(governance_decision_report),
+                "by_gender": {
+                    "men": {"decision": "hold_baseline", "confidence": 0.5, "reason_codes": []},
+                    "women": {"decision": "hold_baseline", "confidence": 0.5, "reason_codes": []},
+                },
+                "aggregate": {"decision": "hold_baseline", "reason_codes": []},
             },
         },
     }

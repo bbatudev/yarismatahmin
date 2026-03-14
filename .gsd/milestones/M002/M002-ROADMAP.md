@@ -53,7 +53,7 @@ This milestone is complete only when all are true:
 - [x] **S02: Regime-Aware Calibration Policy Engine** `risk:high` `depends:[S01]`
   > After this: Kalibrasyon method seçimi policy kontratıyla deterministik yürür ve before/after kalite deltasını raporlar.
 
-- [ ] **S03: Governance Decision Fusion (Ablation + Drift + Calibration)** `risk:medium` `depends:[S01,S02]`
+- [x] **S03: Governance Decision Fusion (Ablation + Drift + Calibration)** `risk:medium` `depends:[S01,S02]`
   > After this: Governance decision surface reason-coded confidence ile multi-evidence karar üretir.
 
 - [ ] **S04: Policy-Gated Final Integration** `risk:medium` `depends:[S03]`
