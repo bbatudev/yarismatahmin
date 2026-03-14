@@ -42,3 +42,9 @@ Canonical train payload’ından (feature snapshot + split metrics + model impor
 - `mania_pipeline/scripts/run_pipeline.py` — ledger artifact emission wiring.
 - `mania_pipeline/tests/test_feature_governance_ledger.py` — ledger schema/domain testleri.
 - `mania_pipeline/tests/test_run_pipeline_s05_governance_contract.py` — ledger wiring assertion (slice-level contract başlangıcı).
+
+## Observability Impact
+
+- `stage_outputs.eval_report.governance` altında `artifacts.ledger_csv` ve `summary.default_action_counts` sinyalleri görünür hale gelir.
+- Gelecek agent ledger içeriğini `governance_ledger.csv` üzerinden satır bazında, metadata özetini `run_metadata.json` üzerinden stage seviyesinde inspect eder.
+- Failure visibility: schema dışı `default_action` veya eksik zorunlu alan durumunda testler deterministik kırılır; women payload’ında men-only feature yazımı yapılırsa ledger contract testi açık reason ile fail olur.

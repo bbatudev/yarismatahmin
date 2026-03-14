@@ -21,6 +21,7 @@
 - `./venv/Scripts/python -m pytest mania_pipeline/tests/test_run_pipeline_cli.py mania_pipeline/tests/test_run_pipeline_s04_calibration_contract.py`
 - `./venv/Scripts/python mania_pipeline/scripts/run_pipeline.py --seed 42 --run-label s05_governance_smoke`
 - `./venv/Scripts/python -c "import json, pathlib; runs=sorted(pathlib.Path('mania_pipeline/artifacts/runs').glob('*_s05_governance_smoke')); assert runs, 'no run'; run=runs[-1]; md=json.loads((run/'run_metadata.json').read_text(encoding='utf-8')); er=json.loads((run/'eval_report.json').read_text(encoding='utf-8')); gov=md['stage_outputs']['eval_report']['governance']; assert pathlib.Path(gov['artifacts']['ledger_csv']).exists(); assert pathlib.Path(gov['artifacts']['ablation_report_json']).exists(); assert er['governance']['summary']['executed_group_count'] >= 1; print('S05 governance contract ok:', run.name)"`
+- `./venv/Scripts/python -c "import json, pathlib; runs=sorted(pathlib.Path('mania_pipeline/artifacts/runs').glob('*_s05_governance_smoke')); assert runs, 'no run'; run=runs[-1]; md=json.loads((run/'run_metadata.json').read_text(encoding='utf-8')); summary=md['stage_outputs']['eval_report']['governance']['summary']; assert 'skipped_groups' in summary and isinstance(summary['skipped_groups'], list); allowed={'group_missing','no_gender_features','split_empty','empty_high_prob_band'}; bad=[g for g in summary['skipped_groups'] if g.get('reason') not in allowed]; assert not bad, f'invalid skip reasons: {bad}'; print('S05 diagnostics contract ok:', run.name)"`
 
 ## Observability / Diagnostics
 
@@ -37,7 +38,7 @@
 
 ## Tasks
 
-- [ ] **T01: Build governance ledger contract from canonical train payload** `est:1h`
+- [x] **T01: Build governance ledger contract from canonical train payload** `est:1h`
   - Why: R008’in zorunlu ledger alanlarını deterministic ve split-aware evidence ile üretmeden controlled ablation seçimi güvenilir olmaz.
   - Files: `mania_pipeline/scripts/feature_governance.py`, `mania_pipeline/scripts/run_pipeline.py`, `mania_pipeline/tests/test_feature_governance_ledger.py`, `mania_pipeline/tests/test_run_pipeline_s05_governance_contract.py`
   - Do: Feature group sınıflandırma + default_action policy helper’ını yaz; Men/Women feature namespace farkını gender-aware işle; ledger satırlarını required schema ile üret ve CSV yazım sözleşmesini testle.

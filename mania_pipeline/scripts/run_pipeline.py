@@ -101,6 +101,11 @@ def _load_split_leakage_contracts_module():
     return _load_script_module("split_leakage_contracts.py", "split_leakage_contracts_stage")
 
 
+@lru_cache(maxsize=1)
+def _load_feature_governance_module():
+    return _load_script_module("feature_governance.py", "feature_governance_stage")
+
+
 def validate_split_contract(df):
     contracts_module = _load_split_leakage_contracts_module()
     return contracts_module.validate_split_contract(df)
@@ -586,6 +591,7 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
 
     calibration_rows: list[dict[str, Any]] = []
     calibration_summary: dict[str, dict[str, Any]] = {"men": {}, "women": {}}
+    governance_importances: dict[str, list[float] | None] = {"men": None, "women": None}
 
     for gender_key in ("men", "women"):
         gender_payload = genders_payload.get(gender_key)
@@ -610,6 +616,17 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
 
         if not hasattr(model, "predict_proba"):
             raise RuntimeError(f"[{gender_key}] loaded model does not implement predict_proba")
+
+        raw_importances = getattr(model, "feature_importances_", None)
+        if raw_importances is None:
+            governance_importances[gender_key] = None
+        else:
+            if hasattr(raw_importances, "tolist"):
+                raw_importances = raw_importances.tolist()
+            if isinstance(raw_importances, (list, tuple)):
+                governance_importances[gender_key] = [float(v) for v in raw_importances]
+            else:
+                governance_importances[gender_key] = None
 
         features_path = _resolve_feature_path_for_gender(context, gender_key)
         feature_df = pd.read_csv(features_path)
@@ -677,6 +694,34 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
         "calibration_summary": calibration_summary,
     }
 
+    governance_module = _load_feature_governance_module()
+    governance_rows = governance_module.build_governance_ledger_rows(
+        genders_payload=genders_payload,
+        model_importances=governance_importances,
+    )
+    governance_ledger_path = Path(context["run_dir"]) / "governance_ledger.csv"
+    governance_df = pd.DataFrame(governance_rows)
+    required_columns = [
+        "feature",
+        "group",
+        "default_action",
+        "evidence",
+        "gender",
+    ]
+    for column in required_columns:
+        if column not in governance_df.columns:
+            governance_df[column] = None
+    governance_df = governance_df[required_columns]
+    governance_df.to_csv(governance_ledger_path, index=False)
+
+    governance_summary = governance_module.build_governance_summary(governance_rows)
+    governance_payload = {
+        "artifacts": {
+            "ledger_csv": str(governance_ledger_path),
+        },
+        "summary": governance_summary,
+    }
+
     report_payload = {
         "run_id": context["run_id"],
         "seed": context["seed"],
@@ -686,6 +731,7 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
         "metrics_table": metrics_table,
         "side_by_side_summary": side_by_side_summary,
         "calibration": calibration_payload,
+        "governance": governance_payload,
     }
 
     report_path = Path(context["run_dir"]) / "eval_report.json"
@@ -694,6 +740,7 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
     return {
         "eval_report": str(report_path),
         "calibration": calibration_payload,
+        "governance": governance_payload,
     }
 
 
