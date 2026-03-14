@@ -56,7 +56,7 @@ This milestone is complete only when all are true:
 - [x] **S03: Ensemble Candidate Integration** `risk:medium` `depends:[S02]`
   > After this: baseline vs ensemble kalite karşılaştırması ve seçim sinyali canonical eval yüzeyine bağlanır.
 
-- [ ] **S04: Submission Readiness Final Gate** `risk:medium` `depends:[S03]`
+- [x] **S04: Submission Readiness Final Gate** `risk:medium` `depends:[S03]`
   > After this: quality-threshold + policy gate + submission contract birleşik readiness raporu üretilir.
 
 ## Boundary Map

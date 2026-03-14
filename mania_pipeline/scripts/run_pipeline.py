@@ -1554,6 +1554,110 @@ def _build_optional_submission(context: dict[str, Any]) -> dict[str, Any]:
     return report_payload
 
 
+def _evaluate_submission_readiness(
+    *,
+    context: dict[str, Any],
+    artifact_contract_payload: dict[str, Any],
+    reproducibility_payload: dict[str, Any],
+    regression_payload: dict[str, Any],
+    policy_gate_payload: dict[str, Any],
+    submission_payload: dict[str, Any],
+    ensemble_output: dict[str, Any],
+) -> dict[str, Any]:
+    blocking_checks: list[str] = []
+    warnings: list[str] = []
+
+    if not artifact_contract_payload.get("pass", False):
+        blocking_checks.append("artifact_contract_failed")
+
+    reproducibility_status = str(reproducibility_payload.get("status", "skipped"))
+    if reproducibility_status == "failed":
+        blocking_checks.append("reproducibility_failed")
+    elif reproducibility_status == "skipped":
+        warnings.append("reproducibility_baseline_missing")
+
+    regression_status = str(regression_payload.get("status", "skipped"))
+    if regression_status == "failed":
+        blocking_checks.append("regression_gate_failed")
+    elif regression_status == "skipped":
+        warnings.append("regression_baseline_missing")
+
+    regression_warnings = regression_payload.get("warnings", [])
+    if isinstance(regression_warnings, list) and regression_warnings:
+        warnings.extend(f"regression:{item}" for item in regression_warnings)
+
+    submission_stage = str(submission_payload.get("stage", context.get("submission_stage", "none")))
+    submission_status = str(submission_payload.get("status", "skipped"))
+
+    if submission_stage == "none":
+        warnings.append("submission_not_requested")
+    elif submission_status != "passed":
+        blocking_checks.append("submission_not_ready")
+
+    ensemble_aggregate = ensemble_output.get("aggregate", {}) if isinstance(ensemble_output, dict) else {}
+    ensemble_decision = (
+        ensemble_aggregate.get("decision") if isinstance(ensemble_aggregate, dict) else None
+    )
+    if ensemble_decision is None:
+        warnings.append("ensemble_decision_unavailable")
+
+    if blocking_checks:
+        readiness_status = "blocked"
+        readiness_reason = "blocking_checks_failed"
+    elif warnings:
+        readiness_status = "caution"
+        readiness_reason = "non_blocking_warnings"
+    else:
+        readiness_status = "ready"
+        readiness_reason = None
+
+    return {
+        "run_id": context.get("run_id"),
+        "seed": context.get("seed"),
+        "generated_at": _now_utc_iso(),
+        "status": readiness_status,
+        "reason": readiness_reason,
+        "checks": {
+            "artifact_contract": {
+                "status": "passed" if artifact_contract_payload.get("pass", False) else "failed",
+                "missing_artifacts": artifact_contract_payload.get("missing_artifacts", []),
+            },
+            "reproducibility": {
+                "status": reproducibility_status,
+                "reason": reproducibility_payload.get("reason"),
+            },
+            "regression_gate": {
+                "status": regression_status,
+                "reason": regression_payload.get("reason"),
+                "blocking_failures": regression_payload.get("blocking_failures", []),
+                "warnings": regression_payload.get("warnings", []),
+            },
+            "policy_gate": {
+                "status": policy_gate_payload.get("regression_status"),
+                "aggregate_decision": policy_gate_payload.get("aggregate_decision"),
+                "warnings": policy_gate_payload.get("warnings", []),
+            },
+            "submission": {
+                "stage": submission_stage,
+                "status": submission_status,
+                "reason": submission_payload.get("reason"),
+                "validation_report_json": submission_payload.get("validation_report_json"),
+                "submission_csv": submission_payload.get("submission_csv"),
+            },
+            "ensemble": {
+                "decision": ensemble_decision,
+                "promoted_genders": (
+                    ensemble_aggregate.get("promoted_genders", [])
+                    if isinstance(ensemble_aggregate, dict)
+                    else []
+                ),
+            },
+        },
+        "blocking_checks": sorted(set(blocking_checks)),
+        "warnings": sorted(set(str(item) for item in warnings)),
+    }
+
+
 def _resolve_feature_path_for_gender(context: dict[str, Any], gender_key: str) -> Path:
     feature_outputs = context.get("stage_outputs", {}).get("feature", {}).get("outputs", {})
     output_key = f"{gender_key}_features"
@@ -2907,6 +3011,48 @@ def stage_artifact(context: dict[str, Any]) -> dict[str, Any]:
     policy_gate_path = run_dir / "policy_gate_report.json"
     _write_json(policy_gate_path, policy_gate_payload)
 
+    pre_submission_blockers: list[str] = []
+    if missing_artifacts:
+        pre_submission_blockers.append("artifact_contract_failed")
+    if reproducibility_payload.get("status") == "failed":
+        pre_submission_blockers.append("reproducibility_failed")
+    if regression_payload.get("status") == "failed":
+        pre_submission_blockers.append("regression_gate_failed")
+
+    submission_error: Exception | None = None
+    submission_stage = str(context.get("submission_stage", "none"))
+    if pre_submission_blockers:
+        submission_payload = {
+            "status": "skipped",
+            "reason": "blocked_before_submission",
+            "stage": submission_stage,
+        }
+    else:
+        try:
+            submission_payload = _build_optional_submission(context)
+        except Exception as exc:
+            submission_error = exc
+            submission_payload = {
+                "status": "failed",
+                "reason": "submission_validation_failed",
+                "stage": submission_stage,
+                "validation_report_json": str(run_dir / "submission_validation_report.json"),
+                "submission_csv": None,
+                "error": str(exc),
+            }
+
+    readiness_payload = _evaluate_submission_readiness(
+        context=context,
+        artifact_contract_payload=artifact_contract_payload,
+        reproducibility_payload=reproducibility_payload,
+        regression_payload=regression_payload,
+        policy_gate_payload=policy_gate_payload,
+        submission_payload=submission_payload,
+        ensemble_output=ensemble_output,
+    )
+    readiness_path = run_dir / "submission_readiness_report.json"
+    _write_json(readiness_path, readiness_payload)
+
     if missing_artifacts:
         raise RuntimeError(
             "artifact contract failed: missing required artifacts -> " + ", ".join(sorted(missing_artifacts))
@@ -2924,7 +3070,8 @@ def stage_artifact(context: dict[str, Any]) -> dict[str, Any]:
             + json.dumps(regression_payload.get("blocking_failures", []), ensure_ascii=False)
         )
 
-    submission_payload = _build_optional_submission(context)
+    if submission_error is not None:
+        raise submission_error
 
     run_files = sorted(
         str(path.relative_to(run_dir))
@@ -2961,6 +3108,10 @@ def stage_artifact(context: dict[str, Any]) -> dict[str, Any]:
                 "report_json": submission_payload.get("validation_report_json"),
                 "submission_csv": submission_payload.get("submission_csv"),
             },
+            "readiness": {
+                "status": readiness_payload.get("status"),
+                "report_json": str(readiness_path),
+            },
         },
     }
 
@@ -2994,6 +3145,10 @@ def stage_artifact(context: dict[str, Any]) -> dict[str, Any]:
             "submission_csv": submission_payload.get("submission_csv"),
             "stage": submission_payload.get("stage"),
             "reason": submission_payload.get("reason"),
+        },
+        "readiness": {
+            "status": readiness_payload.get("status"),
+            "report_json": str(readiness_path),
         },
     }
 

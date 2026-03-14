@@ -153,9 +153,9 @@ Guidelines:
 - Why it matters: Araştırmadan yarışma teslimine geçişi güvenli hale getirir.
 - Source: user
 - Primary owning slice: M001/S07
-- Supporting slices: M003/S01 (provisional)
+- Supporting slices: M003/S04
 - Validation: validated by execution
-- Notes: S07’de `--submission-stage stage2` runtime proof’u ile `submission_stage2.csv` + strict validation report (`submission_validation_report.json`) kontratı doğrulandı.
+- Notes: S07’de `--submission-stage stage2` runtime proof’u ile `submission_stage2.csv` + strict validation report (`submission_validation_report.json`) kontratı doğrulandı; M003/S04’te bu sinyaller `submission_readiness_report.json` altında final readiness fusion kararına bağlandı.
 
 ### R019 — Single execution path enforcement
 - Class: constraint
@@ -242,7 +242,7 @@ Guidelines:
 | R009 | quality-attribute | validated | M001/S05 | M002/S01 | validated (S05 ablation delta contract tests + canonical smoke run artifact assertions) |
 | R010 | launchability | validated | M001/S06 | M001/S07 | validated (S06 artifact contract report + required-file fail-fast checks in runtime and tests) |
 | R011 | continuity | validated | M001/S06 | none | validated (S06 reproducibility report with same commit+seed tolerance pass/fail enforcement) |
-| R012 | integration | validated | M001/S07 | M003/S01 | validated (S07 submission stage runtime proof + strict `ID,Pred` validation report checks) |
+| R012 | integration | validated | M001/S07 | M003/S04 | validated (S07 submission stage runtime proof + strict `ID,Pred` validation report checks + S04 readiness fusion report) |
 | R014 | differentiator | validated | M002/S02 | M002/S01,S03 | validated (S02 policy report contract + canonical smoke proof) |
 | R018 | failure-visibility | validated | M001/S06 | M002/S01,S03,S04 | validated (S06 regression gate report + S04 policy-gated fallback diagnostics) |
 | R019 | constraint | validated | M001/S03 | M001/S07 | validated (S03 notebook authority guardrail test) |
