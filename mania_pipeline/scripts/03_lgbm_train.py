@@ -103,13 +103,18 @@ def _compute_metrics_by_split(model, df, feature_columns):
     return metrics_by_split
 
 
-def resolve_training_params(*, profile: str, random_state: int) -> dict:
+def resolve_training_params(*, profile: str, random_state: int, param_overrides: dict | None = None) -> dict:
     profile_key = str(profile).strip().lower()
     if profile_key not in TRAINING_PROFILES:
         allowed = ", ".join(sorted(TRAINING_PROFILES.keys()))
         raise ValueError(f"unknown training profile: {profile}. allowed={allowed}")
 
-    profile_params = TRAINING_PROFILES[profile_key]
+    profile_params = dict(TRAINING_PROFILES[profile_key])
+    if isinstance(param_overrides, dict):
+        for key, value in param_overrides.items():
+            if key in profile_params and value is not None:
+                profile_params[key] = value
+
     return {
         "objective": "binary",
         "metric": "binary_logloss",
@@ -123,7 +128,7 @@ def resolve_training_params(*, profile: str, random_state: int) -> dict:
 # ─────────────────────────────────────────────────────────
 # MODEL EĞİTİMİ (LIGHTGBM)
 # ─────────────────────────────────────────────────────────
-def train_baseline(df, gender="M", random_state=42, profile="baseline"):
+def train_baseline(df, gender="M", random_state=42, profile="baseline", param_overrides=None):
     tag = "Men" if gender == "M" else "Women"
     print(f"\n{'='*55}")
     print(f"  {tag.upper()} BASELINE MODEL EĞİTİMİ BAŞLIYOR")
@@ -146,7 +151,11 @@ def train_baseline(df, gender="M", random_state=42, profile="baseline"):
     features = [c for c in df.columns if c not in DROP_COLUMNS]
 
     training_profile = str(profile).strip().lower()
-    params = resolve_training_params(profile=training_profile, random_state=random_state)
+    params = resolve_training_params(
+        profile=training_profile,
+        random_state=random_state,
+        param_overrides=param_overrides,
+    )
 
     print(f"Toplam özellik sayısı: {len(features)}")
     print(f"Training profile: {training_profile}")

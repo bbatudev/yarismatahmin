@@ -12,16 +12,16 @@ Guidelines:
 
 ## Active
 
-### R013 — Hyperparameter optimization (Optuna)
-- Class: quality-attribute
+### R015 — Ensemble layer beyond baseline LGBM
+- Class: core-capability
 - Status: active
-- Description: Hiperparametre araması ile baseline üstü performans aranması.
-- Why it matters: M003 model kalite tavanını yükseltir.
-- Source: user
-- Primary owning slice: M003/S02
-- Supporting slices: M003/S01
+- Description: Birden çok modelin weighted/stacked kombinasyonu.
+- Why it matters: Tek model kırılganlığını azaltabilir.
+- Source: inferred
+- Primary owning slice: M003/S03
+- Supporting slices: M003/S02,S04
 - Validation: mapped
-- Notes: S01 ile training profile contract seami kuruldu; reproducible HPO harness S02’de eklenecek.
+- Notes: S02 HPO harness çıktıları S03 ensemble candidate seçimi için hazır.
 
 ## Validated
 
@@ -190,18 +190,18 @@ Guidelines:
 - Validation: validated by execution
 - Notes: S02’de `calibration_policy_report.json` + `stage_outputs.eval_report.calibration_policy` contract’ı test-suite ve `m002_s02_policy_smoke` runtime proof ile doğrulandı.
 
-## Deferred
+### R013 — Hyperparameter optimization (Optuna)
+- Class: quality-attribute
+- Status: validated
+- Description: Hiperparametre araması ile baseline üstü performans aranması.
+- Why it matters: M003 model kalite tavanını yükseltir.
+- Source: user
+- Primary owning slice: M003/S02
+- Supporting slices: M003/S01
+- Validation: validated by execution
+- Notes: S02’de deterministic HPO trial harness (`--hpo-trials`, `hpo_report.json`, `stage_outputs.train.hpo`) test-suite ve `m003_s02_hpo_smoke` runtime proof ile doğrulandı.
 
-### R015 — Ensemble layer beyond baseline LGBM
-- Class: core-capability
-- Status: deferred
-- Description: Birden çok modelin weighted/stacked kombinasyonu.
-- Why it matters: Tek model kırılganlığını azaltabilir.
-- Source: inferred
-- Primary owning slice: M003/S02 (provisional)
-- Supporting slices: none
-- Validation: unmapped
-- Notes: Önce tek-model governance ve regression gate olgunlaşmalı.
+## Deferred
 
 ## Out of Scope
 
@@ -246,8 +246,8 @@ Guidelines:
 | R014 | differentiator | validated | M002/S02 | M002/S01,S03 | validated (S02 policy report contract + canonical smoke proof) |
 | R018 | failure-visibility | validated | M001/S06 | M002/S01,S03,S04 | validated (S06 regression gate report + S04 policy-gated fallback diagnostics) |
 | R019 | constraint | validated | M001/S03 | M001/S07 | validated (S03 notebook authority guardrail test) |
-| R013 | quality-attribute | active | M003/S02 | M003/S01 | mapped |
-| R015 | core-capability | deferred | M003/S02 | none | unmapped |
+| R013 | quality-attribute | validated | M003/S02 | M003/S01 | validated (S02 deterministic HPO report contract + canonical smoke proof) |
+| R015 | core-capability | active | M003/S03 | M003/S02,S04 | mapped |
 | R016 | anti-feature | out-of-scope | none | none | n/a |
 | R017 | anti-feature | out-of-scope | none | none | n/a |
 
@@ -255,5 +255,5 @@ Guidelines:
 
 - Active requirements: 1
 - Mapped to slices: 1
-- Validated: 15
+- Validated: 16
 - Unmapped active requirements: 0

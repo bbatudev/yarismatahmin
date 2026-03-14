@@ -51,6 +51,16 @@ DRIFT_REGIME_ORDER = ("close", "medium", "wide")
 CALIBRATION_POLICY_METHODS = ("none", "platt", "isotonic")
 CALIBRATION_POLICY_MIN_VAL_SAMPLES = 80
 CALIBRATION_POLICY_MIN_IMPROVEMENT = 0.001
+HPO_ALLOWED_PROFILES = ("baseline", "quality_v1")
+HPO_MAX_TRIALS = 20
+HPO_PARAM_SPACE = {
+    "learning_rate": [0.02, 0.03, 0.05, 0.07],
+    "num_leaves": [31, 47, 63],
+    "min_child_samples": [10, 15, 20, 30],
+    "colsample_bytree": [0.7, 0.8, 0.9, 1.0],
+    "subsample": [0.7, 0.8, 0.9, 1.0],
+    "n_estimators": [800, 1000, 1200, 1400],
+}
 
 
 def _now_utc_iso() -> str:
@@ -239,6 +249,9 @@ def _metadata_view(context: dict[str, Any]) -> dict[str, Any]:
         "run_label": context.get("run_label"),
         "artifacts_root": context.get("artifacts_root"),
         "run_dir": context.get("run_dir"),
+        "training_profile": context.get("training_profile"),
+        "hpo_trials": context.get("hpo_trials"),
+        "hpo_target_profile": context.get("hpo_target_profile"),
         "status": context.get("status"),
         "finished_at": context.get("finished_at"),
         "duration_ms": context.get("duration_ms"),
@@ -336,6 +349,175 @@ def stage_feature(context: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _train_with_optional_profile(
+    *,
+    train_module: Any,
+    df: pd.DataFrame,
+    gender_label: str,
+    random_state: int,
+    profile: str,
+    param_overrides: dict[str, Any] | None = None,
+) -> tuple[Any, dict[str, Any]]:
+    attempts: list[dict[str, Any]] = []
+
+    if param_overrides is not None:
+        attempts.append(
+            {
+                "random_state": random_state,
+                "profile": profile,
+                "param_overrides": param_overrides,
+            }
+        )
+
+    attempts.append(
+        {
+            "random_state": random_state,
+            "profile": profile,
+        }
+    )
+
+    attempts.append(
+        {
+            "random_state": random_state,
+        }
+    )
+
+    last_exc: Exception | None = None
+    for kwargs in attempts:
+        try:
+            return train_module.train_baseline(df, gender_label, **kwargs)
+        except TypeError as exc:
+            message = str(exc)
+            if "unexpected keyword argument" not in message:
+                raise
+            last_exc = exc
+            continue
+
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError(f"[{gender_label}] failed to call train_baseline")
+
+
+def _build_hpo_trial_param_overrides(*, seed: int, trials: int) -> list[dict[str, Any]]:
+    rng = np.random.default_rng(int(seed))
+    candidates: list[dict[str, Any]] = []
+    for _ in range(int(trials)):
+        candidate = {
+            key: values[int(rng.integers(0, len(values)))]
+            for key, values in HPO_PARAM_SPACE.items()
+        }
+        candidates.append(candidate)
+    return candidates
+
+
+def _run_hpo_search_for_gender(
+    *,
+    train_module: Any,
+    df: pd.DataFrame,
+    gender_key: str,
+    seed: int,
+    target_profile: str,
+    trial_overrides: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if not trial_overrides:
+        return {
+            "status": "skipped",
+            "reason": "no_trials_requested",
+            "target_profile": target_profile,
+            "trials_requested": 0,
+            "trials_executed": 0,
+            "best_trial_id": None,
+            "best_val_brier": None,
+            "candidates": [],
+        }
+
+    gender_label = "M" if gender_key == "men" else "W"
+    candidates: list[dict[str, Any]] = []
+    successful: list[dict[str, Any]] = []
+
+    for trial_index, overrides in enumerate(trial_overrides, start=1):
+        trial_seed = int(seed) + trial_index
+        candidate_payload: dict[str, Any] = {
+            "trial_id": trial_index,
+            "seed": trial_seed,
+            "param_overrides": overrides,
+            "status": "failed",
+            "reason": None,
+            "metrics": {},
+        }
+
+        try:
+            _, payload = _train_with_optional_profile(
+                train_module=train_module,
+                df=df,
+                gender_label=gender_label,
+                random_state=trial_seed,
+                profile=target_profile,
+                param_overrides=overrides,
+            )
+        except Exception as exc:
+            candidate_payload["reason"] = f"trial_failed:{exc.__class__.__name__}"
+            candidates.append(candidate_payload)
+            continue
+
+        metrics_by_split = payload.get("metrics_by_split", {}) if isinstance(payload, dict) else {}
+        val_metrics = metrics_by_split.get("Val", {}) if isinstance(metrics_by_split, dict) else {}
+        test_metrics = metrics_by_split.get("Test", {}) if isinstance(metrics_by_split, dict) else {}
+        val_brier = _as_float_or_none(val_metrics.get("brier"))
+
+        candidate_payload.update(
+            {
+                "status": "passed" if val_brier is not None else "failed",
+                "reason": None if val_brier is not None else "missing_val_brier",
+                "metrics": {
+                    "val_brier": val_brier,
+                    "val_logloss": _as_float_or_none(val_metrics.get("logloss")),
+                    "val_auc": _as_float_or_none(val_metrics.get("auc")),
+                    "test_brier": _as_float_or_none(test_metrics.get("brier")),
+                },
+            }
+        )
+
+        candidates.append(candidate_payload)
+        if candidate_payload["status"] == "passed":
+            successful.append(candidate_payload)
+
+    if not successful:
+        return {
+            "status": "failed",
+            "reason": "no_successful_trials",
+            "target_profile": target_profile,
+            "trials_requested": len(trial_overrides),
+            "trials_executed": 0,
+            "best_trial_id": None,
+            "best_val_brier": None,
+            "candidates": candidates,
+        }
+
+    best = min(
+        successful,
+        key=lambda candidate: (
+            candidate.get("metrics", {}).get("val_brier")
+            if isinstance(candidate.get("metrics", {}).get("val_brier"), (int, float))
+            else float("inf"),
+            int(candidate.get("trial_id", 0)),
+        ),
+    )
+
+    return {
+        "status": "passed",
+        "reason": None,
+        "target_profile": target_profile,
+        "trials_requested": len(trial_overrides),
+        "trials_executed": len(successful),
+        "best_trial_id": int(best.get("trial_id", 0)),
+        "best_val_brier": best.get("metrics", {}).get("val_brier"),
+        "best_test_brier": best.get("metrics", {}).get("test_brier"),
+        "best_param_overrides": best.get("param_overrides", {}),
+        "candidates": candidates,
+    }
+
+
 def stage_train(context: dict[str, Any]) -> dict[str, Any]:
     feature_outputs = context.get("stage_outputs", {}).get("feature", {})
     gates = feature_outputs.get("gates", {})
@@ -366,25 +548,100 @@ def stage_train(context: dict[str, Any]) -> dict[str, Any]:
 
     training_profile = str(context.get("training_profile", "baseline")).strip().lower()
 
-    def _train_with_profile(df, gender_label):
-        try:
-            return train_module.train_baseline(
-                df,
-                gender_label,
-                random_state=context["seed"],
-                profile=training_profile,
-            )
-        except TypeError as exc:
-            if "profile" not in str(exc):
-                raise
-            return train_module.train_baseline(
-                df,
-                gender_label,
-                random_state=context["seed"],
-            )
+    men_model, men_payload = _train_with_optional_profile(
+        train_module=train_module,
+        df=men_df,
+        gender_label="M",
+        random_state=context["seed"],
+        profile=training_profile,
+    )
+    women_model, women_payload = _train_with_optional_profile(
+        train_module=train_module,
+        df=women_df,
+        gender_label="W",
+        random_state=context["seed"],
+        profile=training_profile,
+    )
 
-    men_model, men_payload = _train_with_profile(men_df, "M")
-    women_model, women_payload = _train_with_profile(women_df, "W")
+    hpo_trials_raw = int(context.get("hpo_trials", 0) or 0)
+    if hpo_trials_raw < 0:
+        raise RuntimeError("hpo_trials must be >= 0")
+    hpo_trials = min(hpo_trials_raw, HPO_MAX_TRIALS)
+
+    hpo_target_profile = str(context.get("hpo_target_profile", "quality_v1")).strip().lower()
+    if hpo_target_profile not in HPO_ALLOWED_PROFILES:
+        raise RuntimeError(
+            f"unknown hpo target profile: {hpo_target_profile}. allowed={','.join(HPO_ALLOWED_PROFILES)}"
+        )
+
+    hpo_trial_overrides = _build_hpo_trial_param_overrides(seed=context["seed"], trials=hpo_trials)
+    hpo_by_gender = {
+        "men": _run_hpo_search_for_gender(
+            train_module=train_module,
+            df=men_df,
+            gender_key="men",
+            seed=context["seed"],
+            target_profile=hpo_target_profile,
+            trial_overrides=hpo_trial_overrides,
+        ),
+        "women": _run_hpo_search_for_gender(
+            train_module=train_module,
+            df=women_df,
+            gender_key="women",
+            seed=context["seed"] + 10_000,
+            target_profile=hpo_target_profile,
+            trial_overrides=hpo_trial_overrides,
+        ),
+    }
+
+    hpo_status = "skipped"
+    if hpo_trials > 0:
+        if any(payload.get("status") == "passed" for payload in hpo_by_gender.values() if isinstance(payload, dict)):
+            hpo_status = "passed"
+        else:
+            hpo_status = "failed"
+
+    run_dir_raw = context.get("run_dir")
+    if isinstance(run_dir_raw, str) and run_dir_raw.strip():
+        run_dir = Path(run_dir_raw)
+    else:
+        run_dir = PIPELINE_DIR / "artifacts" / "runs" / "_train_stage"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    hpo_report_payload = {
+        "run_id": context.get("run_id"),
+        "seed": context.get("seed"),
+        "generated_at": _now_utc_iso(),
+        "status": hpo_status,
+        "config": {
+            "trials_requested": hpo_trials_raw,
+            "trials_executed": hpo_trials,
+            "max_trials": HPO_MAX_TRIALS,
+            "target_profile": hpo_target_profile,
+            "param_space": HPO_PARAM_SPACE,
+        },
+        "by_gender": hpo_by_gender,
+    }
+    hpo_report_path = run_dir / "hpo_report.json"
+    _write_json(hpo_report_path, hpo_report_payload)
+
+    hpo_payload = {
+        "status": hpo_status,
+        "report_json": str(hpo_report_path),
+        "target_profile": hpo_target_profile,
+        "trials_requested": hpo_trials_raw,
+        "trials_executed": hpo_trials,
+        "by_gender": {
+            gender_key: {
+                "status": payload.get("status"),
+                "best_trial_id": payload.get("best_trial_id"),
+                "best_val_brier": payload.get("best_val_brier"),
+                "best_test_brier": payload.get("best_test_brier"),
+            }
+            for gender_key, payload in hpo_by_gender.items()
+            if isinstance(payload, dict)
+        },
+    }
 
     model_dir = Path(train_module.OUT_DIR)
     men_model_path = model_dir / f"lgbm_baseline_men_{context['run_id']}.pkl"
@@ -418,6 +675,7 @@ def stage_train(context: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "training_profile": training_profile,
+        "hpo": hpo_payload,
         "genders": genders,
         "models": {
             "men": genders["men"]["model_path"],
@@ -2290,6 +2548,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="baseline",
         help="Train profile to use in canonical train stage",
     )
+    parser.add_argument(
+        "--hpo-trials",
+        type=int,
+        default=0,
+        help="Optional deterministic HPO trial count (0 disables HPO harness)",
+    )
+    parser.add_argument(
+        "--hpo-target-profile",
+        type=str,
+        choices=HPO_ALLOWED_PROFILES,
+        default="quality_v1",
+        help="Target profile namespace for HPO candidate search",
+    )
     return parser.parse_args(argv)
 
 
@@ -2303,6 +2574,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     context["submission_stage"] = args.submission_stage
     context["training_profile"] = args.training_profile
+    context["hpo_trials"] = int(args.hpo_trials)
+    context["hpo_target_profile"] = args.hpo_target_profile
 
     run_dir = Path(context["run_dir"])
     run_dir.mkdir(parents=True, exist_ok=True)

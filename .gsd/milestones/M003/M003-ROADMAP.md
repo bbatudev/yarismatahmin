@@ -50,7 +50,7 @@ This milestone is complete only when all are true:
 - [x] **S01: Training Profile Contract (Baseline vs Quality v1)** `risk:high` `depends:[]`
   > After this: canonical train stage profile seçimini (`baseline|quality_v1`) payload + metadata’da deterministik üretir.
 
-- [ ] **S02: Reproducible HPO Search Harness** `risk:high` `depends:[S01]`
+- [x] **S02: Reproducible HPO Search Harness** `risk:high` `depends:[S01]`
   > After this: HPO adayları ve kazanan konfigürasyon `hpo_report.json` ile izlenebilir olur.
 
 - [ ] **S03: Ensemble Candidate Integration** `risk:medium` `depends:[S02]`
