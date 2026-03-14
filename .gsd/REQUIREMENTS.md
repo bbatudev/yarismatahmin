@@ -12,7 +12,16 @@ Guidelines:
 
 ## Active
 
-- none
+### R013 — Hyperparameter optimization (Optuna)
+- Class: quality-attribute
+- Status: active
+- Description: Hiperparametre araması ile baseline üstü performans aranması.
+- Why it matters: M003 model kalite tavanını yükseltir.
+- Source: user
+- Primary owning slice: M003/S02
+- Supporting slices: M003/S01
+- Validation: mapped
+- Notes: S01 ile training profile contract seami kuruldu; reproducible HPO harness S02’de eklenecek.
 
 ## Validated
 
@@ -183,17 +192,6 @@ Guidelines:
 
 ## Deferred
 
-### R013 — Hyperparameter optimization (Optuna)
-- Class: quality-attribute
-- Status: deferred
-- Description: Hiperparametre araması ile baseline üstü performans aranması.
-- Why it matters: M001 sonrası performans tavanını yükseltir.
-- Source: user
-- Primary owning slice: M002/S02 (provisional)
-- Supporting slices: none
-- Validation: unmapped
-- Notes: Önce canonical foundation stabilize edilecek.
-
 ### R015 — Ensemble layer beyond baseline LGBM
 - Class: core-capability
 - Status: deferred
@@ -248,14 +246,14 @@ Guidelines:
 | R014 | differentiator | validated | M002/S02 | M002/S01,S03 | validated (S02 policy report contract + canonical smoke proof) |
 | R018 | failure-visibility | validated | M001/S06 | M002/S01,S03,S04 | validated (S06 regression gate report + S04 policy-gated fallback diagnostics) |
 | R019 | constraint | validated | M001/S03 | M001/S07 | validated (S03 notebook authority guardrail test) |
-| R013 | quality-attribute | deferred | M002/S02 | none | unmapped |
+| R013 | quality-attribute | active | M003/S02 | M003/S01 | mapped |
 | R015 | core-capability | deferred | M003/S02 | none | unmapped |
 | R016 | anti-feature | out-of-scope | none | none | n/a |
 | R017 | anti-feature | out-of-scope | none | none | n/a |
 
 ## Coverage Summary
 
-- Active requirements: 0
-- Mapped to slices: 0
+- Active requirements: 1
+- Mapped to slices: 1
 - Validated: 15
 - Unmapped active requirements: 0

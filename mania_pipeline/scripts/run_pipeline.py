@@ -364,8 +364,27 @@ def stage_train(context: dict[str, Any]) -> dict[str, Any]:
     if men_df is None or women_df is None:
         raise RuntimeError("Training data missing; feature stage did not produce required files")
 
-    men_model, men_payload = train_module.train_baseline(men_df, "M", random_state=context["seed"])
-    women_model, women_payload = train_module.train_baseline(women_df, "W", random_state=context["seed"])
+    training_profile = str(context.get("training_profile", "baseline")).strip().lower()
+
+    def _train_with_profile(df, gender_label):
+        try:
+            return train_module.train_baseline(
+                df,
+                gender_label,
+                random_state=context["seed"],
+                profile=training_profile,
+            )
+        except TypeError as exc:
+            if "profile" not in str(exc):
+                raise
+            return train_module.train_baseline(
+                df,
+                gender_label,
+                random_state=context["seed"],
+            )
+
+    men_model, men_payload = _train_with_profile(men_df, "M")
+    women_model, women_payload = _train_with_profile(women_df, "W")
 
     model_dir = Path(train_module.OUT_DIR)
     men_model_path = model_dir / f"lgbm_baseline_men_{context['run_id']}.pkl"
@@ -380,6 +399,8 @@ def stage_train(context: dict[str, Any]) -> dict[str, Any]:
         "men": {
             "gender": men_payload.get("gender", "M"),
             "model_path": str(men_model_path),
+            "training_profile": men_payload.get("training_profile", training_profile),
+            "training_params": men_payload.get("training_params", {}),
             "metrics_by_split": men_payload.get("metrics_by_split", {}),
             "feature_snapshot": men_payload.get("feature_snapshot", {}),
             "best_iteration": men_payload.get("best_iteration"),
@@ -387,6 +408,8 @@ def stage_train(context: dict[str, Any]) -> dict[str, Any]:
         "women": {
             "gender": women_payload.get("gender", "W"),
             "model_path": str(women_model_path),
+            "training_profile": women_payload.get("training_profile", training_profile),
+            "training_params": women_payload.get("training_params", {}),
             "metrics_by_split": women_payload.get("metrics_by_split", {}),
             "feature_snapshot": women_payload.get("feature_snapshot", {}),
             "best_iteration": women_payload.get("best_iteration"),
@@ -394,6 +417,7 @@ def stage_train(context: dict[str, Any]) -> dict[str, Any]:
     }
 
     return {
+        "training_profile": training_profile,
         "genders": genders,
         "models": {
             "men": genders["men"]["model_path"],
@@ -2259,6 +2283,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="none",
         help="Optional submission output stage; 'none' disables submission generation",
     )
+    parser.add_argument(
+        "--training-profile",
+        type=str,
+        choices=("baseline", "quality_v1"),
+        default="baseline",
+        help="Train profile to use in canonical train stage",
+    )
     return parser.parse_args(argv)
 
 
@@ -2271,6 +2302,7 @@ def main(argv: list[str] | None = None) -> int:
         argv=argv,
     )
     context["submission_stage"] = args.submission_stage
+    context["training_profile"] = args.training_profile
 
     run_dir = Path(context["run_dir"])
     run_dir.mkdir(parents=True, exist_ok=True)
