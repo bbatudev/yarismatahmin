@@ -12,7 +12,16 @@ Guidelines:
 
 ## Active
 
-- none
+### R014 — Advanced calibration policy by regime
+- Class: differentiator
+- Status: active
+- Description: Men/Women ve sezon rejimine göre isotonic/platt/none seçim politikasının sistematikleştirilmesi.
+- Why it matters: Kalibrasyon davranış ayrışmasını daha iyi yönetir.
+- Source: inferred
+- Primary owning slice: M002/S02
+- Supporting slices: M002/S01, M002/S03
+- Validation: mapped
+- Notes: S01 drift regime signal surface’i tamamlandı; policy coupling S02’de finalize edilecek.
 
 ## Validated
 
@@ -183,17 +192,6 @@ Guidelines:
 - Validation: unmapped
 - Notes: Önce canonical foundation stabilize edilecek.
 
-### R014 — Advanced calibration policy by regime
-- Class: differentiator
-- Status: deferred
-- Description: Men/Women ve sezon rejimine göre isotonic/platt seçim politikasının sistematikleştirilmesi.
-- Why it matters: Kalibrasyon davranış ayrışmasını daha iyi yönetir.
-- Source: inferred
-- Primary owning slice: M002/S01 (provisional)
-- Supporting slices: M002/S03 (provisional)
-- Validation: unmapped
-- Notes: M001 kalibrasyon baseline’ı olmadan erken.
-
 ### R015 — Ensemble layer beyond baseline LGBM
 - Class: core-capability
 - Status: deferred
@@ -245,17 +243,17 @@ Guidelines:
 | R010 | launchability | validated | M001/S06 | M001/S07 | validated (S06 artifact contract report + required-file fail-fast checks in runtime and tests) |
 | R011 | continuity | validated | M001/S06 | none | validated (S06 reproducibility report with same commit+seed tolerance pass/fail enforcement) |
 | R012 | integration | validated | M001/S07 | M003/S01 | validated (S07 submission stage runtime proof + strict `ID,Pred` validation report checks) |
+| R014 | differentiator | active | M002/S02 | M002/S01,S03 | mapped |
 | R018 | failure-visibility | validated | M001/S06 | M002/S01 | validated (S06 regression gate report with blocking/non-blocking policy and runtime enforcement) |
 | R019 | constraint | validated | M001/S03 | M001/S07 | validated (S03 notebook authority guardrail test) |
 | R013 | quality-attribute | deferred | M002/S02 | none | unmapped |
-| R014 | differentiator | deferred | M002/S01 | M002/S03 | unmapped |
 | R015 | core-capability | deferred | M003/S02 | none | unmapped |
 | R016 | anti-feature | out-of-scope | none | none | n/a |
 | R017 | anti-feature | out-of-scope | none | none | n/a |
 
 ## Coverage Summary
 
-- Active requirements: 0
-- Mapped to slices: 0
+- Active requirements: 1
+- Mapped to slices: 1
 - Validated: 14
 - Unmapped active requirements: 0

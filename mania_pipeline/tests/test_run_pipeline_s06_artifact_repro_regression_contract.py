@@ -71,6 +71,7 @@ def _build_context(tmp_path: Path, *, run_id: str, seed: int, git_commit: str, m
     eval_report = _write_json(run_dir / "eval_report.json", {"ok": True})
     calibration_bins = _write_text(run_dir / "calibration_bins.csv", "gender,split\n")
     calibration_report = _write_json(run_dir / "calibration_report.json", {"ok": True})
+    drift_report = _write_json(run_dir / "drift_regime_report.json", {"ok": True})
     governance_ledger = _write_text(run_dir / "governance_ledger.csv", "feature,group\n")
     ablation_report = _write_json(run_dir / "ablation_report.json", {"ok": True})
 
@@ -100,6 +101,14 @@ def _build_context(tmp_path: Path, *, run_id: str, seed: int, git_commit: str, m
                     "men": _calibration_summary(men_ece, men_ece, 0.04),
                     "women": _calibration_summary(women_ece, women_ece, 0.03),
                 },
+            },
+            "drift": {
+                "report_json": str(drift_report),
+                "by_gender": {
+                    "men": {"splits": {}, "regimes": {}},
+                    "women": {"splits": {}, "regimes": {}},
+                },
+                "alerts": [],
             },
             "governance": {
                 "artifacts": {

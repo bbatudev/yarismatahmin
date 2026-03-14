@@ -66,6 +66,7 @@ def _build_context(tmp_path: Path, run_id: str, submission_stage: str = "none") 
             }
         },
     )
+    drift_report = _write_json(run_dir / "drift_regime_report.json", {"ok": True})
     governance_ledger = _write_text(run_dir / "governance_ledger.csv", "feature,group\n")
     ablation_report = _write_json(run_dir / "ablation_report.json", {"ok": True})
 
@@ -118,6 +119,14 @@ def _build_context(tmp_path: Path, run_id: str, submission_stage: str = "none") 
                             }
                         },
                     },
+                },
+                "drift": {
+                    "report_json": str(drift_report),
+                    "by_gender": {
+                        "men": {"splits": {}, "regimes": {}},
+                        "women": {"splits": {}, "regimes": {}},
+                    },
+                    "alerts": [],
                 },
                 "governance": {
                     "artifacts": {

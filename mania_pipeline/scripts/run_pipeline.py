@@ -41,6 +41,9 @@ CALIBRATION_BINS_COLUMNS = (
 HIGH_PROB_THRESHOLD = 0.8
 REPRO_BRIER_TOLERANCE = 1e-4
 REGRESSION_NUMERIC_EPS = 1e-9
+DRIFT_GAP_SHIFT_THRESHOLD = 0.08
+DRIFT_LOW_SAMPLE_THRESHOLD = 25
+DRIFT_REGIME_ORDER = ("close", "medium", "wide")
 
 
 def _now_utc_iso() -> str:
@@ -884,6 +887,140 @@ def _build_calibration_rows_and_summary(
     }
 
 
+def _build_split_drift_summary(*, y_true: np.ndarray, y_prob: np.ndarray) -> dict[str, Any]:
+    sample_count = int(y_true.shape[0])
+    if sample_count == 0:
+        return {
+            "sample_count": 0,
+            "pred_mean": None,
+            "actual_rate": None,
+            "gap": None,
+            "reason": "split_empty",
+        }
+
+    pred_mean = float(np.mean(y_prob))
+    actual_rate = float(np.mean(y_true))
+    return {
+        "sample_count": sample_count,
+        "pred_mean": pred_mean,
+        "actual_rate": actual_rate,
+        "gap": float(pred_mean - actual_rate),
+        "reason": None,
+    }
+
+
+def _seed_regime_from_diff(seed_diff: Any) -> str:
+    numeric = _as_float_or_none(seed_diff)
+    if numeric is None:
+        return "unknown"
+
+    abs_diff = abs(numeric)
+    if abs_diff <= 2:
+        return "close"
+    if abs_diff <= 7:
+        return "medium"
+    return "wide"
+
+
+def _build_test_regime_drift_summary(
+    *,
+    gender_key: str,
+    split_df: pd.DataFrame,
+    y_prob: np.ndarray,
+) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
+    regime_rows: dict[str, dict[str, Any]] = {
+        regime: {
+            "sample_count": 0,
+            "pred_mean": None,
+            "actual_rate": None,
+            "gap": None,
+            "reason": "split_empty" if split_df.empty else "low_sample_regime",
+        }
+        for regime in DRIFT_REGIME_ORDER
+    }
+    alerts: list[dict[str, Any]] = []
+
+    if split_df.empty:
+        return regime_rows, alerts
+
+    working = split_df.copy()
+    if "SeedNum_diff" not in working.columns:
+        for regime in DRIFT_REGIME_ORDER:
+            regime_rows[regime]["reason"] = "seed_feature_missing"
+        alerts.append(
+            {
+                "code": "seed_feature_missing",
+                "gender": gender_key,
+                "split": "Test",
+                "message": "SeedNum_diff column missing; regime segmentation skipped.",
+            }
+        )
+        return regime_rows, alerts
+
+    working["_regime"] = working["SeedNum_diff"].apply(_seed_regime_from_diff)
+    working["_prob"] = y_prob
+
+    for regime in DRIFT_REGIME_ORDER:
+        regime_df = working[working["_regime"] == regime]
+        count = int(len(regime_df))
+        if count == 0:
+            regime_rows[regime] = {
+                "sample_count": 0,
+                "pred_mean": None,
+                "actual_rate": None,
+                "gap": None,
+                "reason": "split_empty",
+            }
+            continue
+
+        pred_mean = float(regime_df["_prob"].mean())
+        actual_rate = float(regime_df["Target"].mean())
+        reason = None
+        if count < DRIFT_LOW_SAMPLE_THRESHOLD:
+            reason = "low_sample_regime"
+            alerts.append(
+                {
+                    "code": "low_sample_regime",
+                    "gender": gender_key,
+                    "split": "Test",
+                    "regime": regime,
+                    "sample_count": count,
+                    "threshold": DRIFT_LOW_SAMPLE_THRESHOLD,
+                }
+            )
+
+        regime_rows[regime] = {
+            "sample_count": count,
+            "pred_mean": pred_mean,
+            "actual_rate": actual_rate,
+            "gap": float(pred_mean - actual_rate),
+            "reason": reason,
+        }
+
+    return regime_rows, alerts
+
+
+def _build_gap_shift_alert(*, gender_key: str, split_summary: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
+    train_gap = _as_float_or_none(split_summary.get("Train", {}).get("gap"))
+    test_gap = _as_float_or_none(split_summary.get("Test", {}).get("gap"))
+
+    if train_gap is None or test_gap is None:
+        return None
+
+    delta = float(test_gap - train_gap)
+    if abs(delta) <= DRIFT_GAP_SHIFT_THRESHOLD:
+        return None
+
+    return {
+        "code": "test_gap_shift",
+        "gender": gender_key,
+        "train_gap": train_gap,
+        "test_gap": test_gap,
+        "delta_gap": delta,
+        "threshold": DRIFT_GAP_SHIFT_THRESHOLD,
+    }
+
+
 def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
     train_result = context.get("stage_outputs", {}).get("train", {})
     metrics_by_split = train_result.get("metrics_by_split", {})
@@ -929,6 +1066,9 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
     calibration_summary: dict[str, dict[str, Any]] = {"men": {}, "women": {}}
     governance_importances: dict[str, list[float] | None] = {"men": None, "women": None}
     feature_frames_by_gender: dict[str, pd.DataFrame] = {}
+    drift_split_summary: dict[str, dict[str, Any]] = {"men": {}, "women": {}}
+    drift_regime_summary: dict[str, dict[str, Any]] = {"men": {}, "women": {}}
+    drift_alerts: list[dict[str, Any]] = []
 
     for gender_key in ("men", "women"):
         gender_payload = genders_payload.get(gender_key)
@@ -1010,6 +1150,28 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
             calibration_rows.extend(split_rows)
             calibration_summary[gender_key][split_label] = split_summary
 
+            drift_split_summary[gender_key][split_label] = _build_split_drift_summary(
+                y_true=split_true,
+                y_prob=split_prob,
+            )
+
+            if split_label == "Test":
+                regime_summary, regime_alerts = _build_test_regime_drift_summary(
+                    gender_key=gender_key,
+                    split_df=split_df,
+                    y_prob=split_prob,
+                )
+                drift_regime_summary[gender_key] = regime_summary
+                drift_alerts.extend(regime_alerts)
+
+    for gender_key in ("men", "women"):
+        gap_alert = _build_gap_shift_alert(
+            gender_key=gender_key,
+            split_summary=drift_split_summary.get(gender_key, {}),
+        )
+        if gap_alert is not None:
+            drift_alerts.append(gap_alert)
+
     calibration_bins_df = pd.DataFrame(calibration_rows, columns=CALIBRATION_BINS_COLUMNS)
     calibration_bins_path = Path(context["run_dir"]) / "calibration_bins.csv"
     calibration_bins_df.to_csv(calibration_bins_path, index=False)
@@ -1031,6 +1193,34 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
         "bin_edges": list(CALIBRATION_BIN_EDGES),
         "high_prob_threshold": HIGH_PROB_THRESHOLD,
         "calibration_summary": calibration_summary,
+    }
+
+    drift_report_payload = {
+        "run_id": context["run_id"],
+        "seed": context["seed"],
+        "generated_at": _now_utc_iso(),
+        "config": {
+            "regimes": list(DRIFT_REGIME_ORDER),
+            "gap_shift_threshold": DRIFT_GAP_SHIFT_THRESHOLD,
+            "low_sample_threshold": DRIFT_LOW_SAMPLE_THRESHOLD,
+        },
+        "by_gender": {
+            gender_key: {
+                "splits": drift_split_summary.get(gender_key, {}),
+                "regimes": drift_regime_summary.get(gender_key, {}),
+            }
+            for gender_key in ("men", "women")
+        },
+        "alerts": drift_alerts,
+    }
+    drift_report_path = Path(context["run_dir"]) / "drift_regime_report.json"
+    _write_json(drift_report_path, drift_report_payload)
+
+    drift_payload = {
+        "report_json": str(drift_report_path),
+        "config": drift_report_payload["config"],
+        "by_gender": drift_report_payload["by_gender"],
+        "alerts": drift_alerts,
     }
 
     governance_module = _load_feature_governance_module()
@@ -1263,6 +1453,7 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
         "metrics_table": metrics_table,
         "side_by_side_summary": side_by_side_summary,
         "calibration": calibration_payload,
+        "drift": drift_payload,
         "governance": governance_payload,
     }
 
@@ -1272,6 +1463,7 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
     return {
         "eval_report": str(report_path),
         "calibration": calibration_payload,
+        "drift": drift_payload,
         "governance": governance_payload,
     }
 
@@ -1283,6 +1475,7 @@ def stage_artifact(context: dict[str, Any]) -> dict[str, Any]:
     train_output = stage_outputs.get("train", {}) if isinstance(stage_outputs.get("train", {}), dict) else {}
     eval_output = stage_outputs.get("eval_report", {}) if isinstance(stage_outputs.get("eval_report", {}), dict) else {}
     calibration_output = eval_output.get("calibration", {}) if isinstance(eval_output.get("calibration", {}), dict) else {}
+    drift_output = eval_output.get("drift", {}) if isinstance(eval_output.get("drift", {}), dict) else {}
     governance_output = eval_output.get("governance", {}) if isinstance(eval_output.get("governance", {}), dict) else {}
     governance_artifacts = (
         governance_output.get("artifacts", {}) if isinstance(governance_output.get("artifacts", {}), dict) else {}
@@ -1295,6 +1488,7 @@ def stage_artifact(context: dict[str, Any]) -> dict[str, Any]:
         "eval_report_json": eval_output.get("eval_report"),
         "calibration_bins_csv": calibration_output.get("bins_csv"),
         "calibration_report_json": calibration_output.get("report_json"),
+        "drift_regime_report_json": drift_output.get("report_json"),
         "governance_ledger_csv": governance_artifacts.get("ledger_csv"),
         "ablation_report_json": governance_artifacts.get("ablation_report_json"),
         "men_model_pkl": train_genders.get("men", {}).get("model_path") if isinstance(train_genders.get("men", {}), dict) else None,
