@@ -18,6 +18,10 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable
 
+from sklearn.isotonic import IsotonicRegression
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import log_loss, roc_auc_score
+
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PIPELINE_DIR = SCRIPT_DIR.parent
@@ -44,6 +48,9 @@ REGRESSION_NUMERIC_EPS = 1e-9
 DRIFT_GAP_SHIFT_THRESHOLD = 0.08
 DRIFT_LOW_SAMPLE_THRESHOLD = 25
 DRIFT_REGIME_ORDER = ("close", "medium", "wide")
+CALIBRATION_POLICY_METHODS = ("none", "platt", "isotonic")
+CALIBRATION_POLICY_MIN_VAL_SAMPLES = 80
+CALIBRATION_POLICY_MIN_IMPROVEMENT = 0.001
 
 
 def _now_utc_iso() -> str:
@@ -1021,6 +1028,245 @@ def _build_gap_shift_alert(*, gender_key: str, split_summary: dict[str, dict[str
     }
 
 
+def _safe_auc_from_probs(y_true: np.ndarray, y_prob: np.ndarray) -> tuple[float | None, str | None]:
+    if y_true.shape[0] == 0:
+        return None, "split_empty"
+
+    unique_classes = np.unique(y_true)
+    if unique_classes.shape[0] < 2:
+        only_class = int(unique_classes[0]) if unique_classes.shape[0] == 1 else "unknown"
+        return None, f"single_class_target:{only_class}"
+
+    try:
+        return float(roc_auc_score(y_true, y_prob)), None
+    except ValueError as exc:
+        return None, f"auc_error:{exc}"
+
+
+def _score_probability_bundle(
+    *,
+    gender_key: str,
+    split_label: str,
+    y_true: np.ndarray,
+    y_prob: np.ndarray,
+) -> dict[str, Any]:
+    sample_count = int(y_true.shape[0])
+    if sample_count == 0:
+        return {
+            "sample_count": 0,
+            "brier": None,
+            "logloss": None,
+            "auc": None,
+            "auc_reason": "split_empty",
+            "ece": None,
+            "wmae": None,
+            "high_prob_gap": None,
+            "high_prob_reason": "split_empty",
+            "reason": "split_empty",
+        }
+
+    clipped_probs = np.clip(np.asarray(y_prob, dtype=float), 1e-6, 1 - 1e-6)
+    brier = float(np.mean((clipped_probs - y_true) ** 2))
+    loss = float(log_loss(y_true, clipped_probs, labels=[0, 1]))
+    auc_value, auc_reason = _safe_auc_from_probs(y_true, clipped_probs)
+
+    _, calibration_summary = _build_calibration_rows_and_summary(
+        gender_key=gender_key,
+        split_label=split_label,
+        y_true=y_true,
+        y_prob=clipped_probs,
+    )
+    high_prob_band = calibration_summary.get("high_prob_band", {})
+
+    return {
+        "sample_count": sample_count,
+        "brier": brier,
+        "logloss": loss,
+        "auc": auc_value,
+        "auc_reason": auc_reason,
+        "ece": calibration_summary.get("ece"),
+        "wmae": calibration_summary.get("wmae"),
+        "high_prob_gap": high_prob_band.get("gap") if isinstance(high_prob_band, dict) else None,
+        "high_prob_reason": high_prob_band.get("reason") if isinstance(high_prob_band, dict) else None,
+        "reason": None,
+    }
+
+
+def _calibrate_probability_vectors(
+    *,
+    method: str,
+    val_true: np.ndarray,
+    val_prob: np.ndarray,
+    test_prob: np.ndarray,
+) -> tuple[np.ndarray | None, np.ndarray | None, str | None]:
+    val_prob = np.clip(np.asarray(val_prob, dtype=float), 1e-6, 1 - 1e-6)
+    test_prob = np.clip(np.asarray(test_prob, dtype=float), 1e-6, 1 - 1e-6)
+
+    if method == "none":
+        return val_prob, test_prob, None
+
+    if val_true.shape[0] < CALIBRATION_POLICY_MIN_VAL_SAMPLES:
+        return None, None, "insufficient_val_samples"
+
+    unique_classes = np.unique(val_true)
+    if unique_classes.shape[0] < 2:
+        return None, None, "val_single_class_target"
+
+    try:
+        if method == "platt":
+            calibrator = LogisticRegression(random_state=0, solver="lbfgs", max_iter=200)
+            calibrator.fit(val_prob.reshape(-1, 1), val_true)
+            val_adjusted = calibrator.predict_proba(val_prob.reshape(-1, 1))[:, 1]
+            test_adjusted = calibrator.predict_proba(test_prob.reshape(-1, 1))[:, 1]
+        elif method == "isotonic":
+            calibrator = IsotonicRegression(out_of_bounds="clip")
+            calibrator.fit(val_prob, val_true)
+            val_adjusted = calibrator.predict(val_prob)
+            test_adjusted = calibrator.predict(test_prob)
+        else:
+            return None, None, f"unknown_method:{method}"
+    except Exception as exc:
+        return None, None, f"fit_failed:{exc.__class__.__name__}"
+
+    return np.clip(np.asarray(val_adjusted, dtype=float), 1e-6, 1 - 1e-6), np.clip(
+        np.asarray(test_adjusted, dtype=float), 1e-6, 1 - 1e-6
+    ), None
+
+
+def _dominant_regime(regime_summary: dict[str, Any]) -> str:
+    if not isinstance(regime_summary, dict):
+        return "unknown"
+
+    candidates = []
+    for regime in DRIFT_REGIME_ORDER:
+        payload = regime_summary.get(regime, {}) if isinstance(regime_summary.get(regime, {}), dict) else {}
+        candidates.append((int(payload.get("sample_count") or 0), regime))
+
+    best_count, best_regime = max(candidates, key=lambda item: (item[0], -DRIFT_REGIME_ORDER.index(item[1])))
+    if best_count <= 0:
+        return "unknown"
+    return best_regime
+
+
+def _method_order_for_regime(regime: str) -> tuple[str, ...]:
+    mapping = {
+        "close": ("isotonic", "platt", "none"),
+        "medium": ("platt", "isotonic", "none"),
+        "wide": ("none", "platt", "isotonic"),
+        "unknown": ("none", "platt", "isotonic"),
+    }
+    return mapping.get(regime, mapping["unknown"])
+
+
+def _build_calibration_policy_for_gender(
+    *,
+    gender_key: str,
+    val_true: np.ndarray,
+    val_prob: np.ndarray,
+    test_true: np.ndarray,
+    test_prob: np.ndarray,
+    regime_summary: dict[str, Any],
+    drift_alerts: list[dict[str, Any]],
+) -> dict[str, Any]:
+    dominant_regime = _dominant_regime(regime_summary)
+    method_order = _method_order_for_regime(dominant_regime)
+    default_method = method_order[0]
+
+    candidate_payloads: dict[str, dict[str, Any]] = {}
+    for method in CALIBRATION_POLICY_METHODS:
+        val_adjusted, test_adjusted, availability_reason = _calibrate_probability_vectors(
+            method=method,
+            val_true=val_true,
+            val_prob=val_prob,
+            test_prob=test_prob,
+        )
+
+        if availability_reason is not None or val_adjusted is None or test_adjusted is None:
+            candidate_payloads[method] = {
+                "status": "unavailable",
+                "reason": availability_reason,
+                "val": None,
+                "test": None,
+            }
+            continue
+
+        candidate_payloads[method] = {
+            "status": "available",
+            "reason": None,
+            "val": _score_probability_bundle(
+                gender_key=gender_key,
+                split_label="Val",
+                y_true=val_true,
+                y_prob=val_adjusted,
+            ),
+            "test": _score_probability_bundle(
+                gender_key=gender_key,
+                split_label="Test",
+                y_true=test_true,
+                y_prob=test_adjusted,
+            ),
+        }
+
+    available_methods = [
+        method
+        for method, payload in candidate_payloads.items()
+        if payload.get("status") == "available" and isinstance(payload.get("val"), dict)
+    ]
+
+    if not available_methods:
+        selected_method = "none"
+        selection_reason = "no_available_candidates"
+    else:
+        order_index = {method: idx for idx, method in enumerate(method_order)}
+        best_method = min(
+            available_methods,
+            key=lambda method: (
+                candidate_payloads[method]["val"].get("brier")
+                if isinstance(candidate_payloads[method]["val"].get("brier"), (int, float))
+                else float("inf"),
+                order_index.get(method, 999),
+                method,
+            ),
+        )
+
+        baseline_brier = candidate_payloads.get("none", {}).get("val", {}).get("brier")
+        best_brier = candidate_payloads.get(best_method, {}).get("val", {}).get("brier")
+        improvement = None
+        if isinstance(baseline_brier, (int, float)) and isinstance(best_brier, (int, float)):
+            improvement = float(baseline_brier - best_brier)
+
+        if best_method != default_method and improvement is not None and improvement < CALIBRATION_POLICY_MIN_IMPROVEMENT:
+            if default_method in available_methods:
+                selected_method = default_method
+                selection_reason = "improvement_below_threshold_use_default"
+            else:
+                selected_method = best_method
+                selection_reason = "default_unavailable_use_best"
+        else:
+            selected_method = best_method
+            selection_reason = "best_val_brier"
+
+    selected_payload = candidate_payloads.get(selected_method, {})
+    selected_test = selected_payload.get("test") if isinstance(selected_payload, dict) else None
+
+    gender_alerts = [alert for alert in drift_alerts if isinstance(alert, dict) and alert.get("gender") == gender_key]
+
+    return {
+        "dominant_regime": dominant_regime,
+        "method_order": list(method_order),
+        "default_method": default_method,
+        "selected_method": selected_method,
+        "selection_reason": selection_reason,
+        "min_improvement": CALIBRATION_POLICY_MIN_IMPROVEMENT,
+        "min_val_samples": CALIBRATION_POLICY_MIN_VAL_SAMPLES,
+        "drift_alert_codes": sorted(
+            {str(alert.get("code")) for alert in gender_alerts if alert.get("code") is not None}
+        ),
+        "candidate_methods": candidate_payloads,
+        "selected_test_metrics": selected_test,
+    }
+
+
 def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
     train_result = context.get("stage_outputs", {}).get("train", {})
     metrics_by_split = train_result.get("metrics_by_split", {})
@@ -1066,6 +1312,7 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
     calibration_summary: dict[str, dict[str, Any]] = {"men": {}, "women": {}}
     governance_importances: dict[str, list[float] | None] = {"men": None, "women": None}
     feature_frames_by_gender: dict[str, pd.DataFrame] = {}
+    split_probabilities: dict[str, dict[str, dict[str, np.ndarray]]] = {"men": {}, "women": {}}
     drift_split_summary: dict[str, dict[str, Any]] = {"men": {}, "women": {}}
     drift_regime_summary: dict[str, dict[str, Any]] = {"men": {}, "women": {}}
     drift_alerts: list[dict[str, Any]] = []
@@ -1149,6 +1396,10 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
             )
             calibration_rows.extend(split_rows)
             calibration_summary[gender_key][split_label] = split_summary
+            split_probabilities[gender_key][split_label] = {
+                "y_true": split_true,
+                "y_prob": split_prob,
+            }
 
             drift_split_summary[gender_key][split_label] = _build_split_drift_summary(
                 y_true=split_true,
@@ -1221,6 +1472,48 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
         "config": drift_report_payload["config"],
         "by_gender": drift_report_payload["by_gender"],
         "alerts": drift_alerts,
+    }
+
+    calibration_policy_by_gender: dict[str, Any] = {}
+    for gender_key in ("men", "women"):
+        val_cache = split_probabilities.get(gender_key, {}).get("Val", {})
+        test_cache = split_probabilities.get(gender_key, {}).get("Test", {})
+        val_true = np.asarray(val_cache.get("y_true", np.asarray([], dtype=float)), dtype=float)
+        val_prob = np.asarray(val_cache.get("y_prob", np.asarray([], dtype=float)), dtype=float)
+        test_true = np.asarray(test_cache.get("y_true", np.asarray([], dtype=float)), dtype=float)
+        test_prob = np.asarray(test_cache.get("y_prob", np.asarray([], dtype=float)), dtype=float)
+
+        calibration_policy_by_gender[gender_key] = _build_calibration_policy_for_gender(
+            gender_key=gender_key,
+            val_true=val_true,
+            val_prob=val_prob,
+            test_true=test_true,
+            test_prob=test_prob,
+            regime_summary=drift_regime_summary.get(gender_key, {}),
+            drift_alerts=drift_alerts,
+        )
+
+    calibration_policy_report_payload = {
+        "run_id": context["run_id"],
+        "seed": context["seed"],
+        "generated_at": _now_utc_iso(),
+        "policy_name": "regime_aware_calibration_v1",
+        "config": {
+            "methods": list(CALIBRATION_POLICY_METHODS),
+            "min_val_samples": CALIBRATION_POLICY_MIN_VAL_SAMPLES,
+            "min_improvement": CALIBRATION_POLICY_MIN_IMPROVEMENT,
+            "regime_order": list(DRIFT_REGIME_ORDER),
+        },
+        "by_gender": calibration_policy_by_gender,
+    }
+    calibration_policy_report_path = Path(context["run_dir"]) / "calibration_policy_report.json"
+    _write_json(calibration_policy_report_path, calibration_policy_report_payload)
+
+    calibration_policy_payload = {
+        "report_json": str(calibration_policy_report_path),
+        "policy_name": calibration_policy_report_payload["policy_name"],
+        "config": calibration_policy_report_payload["config"],
+        "by_gender": calibration_policy_by_gender,
     }
 
     governance_module = _load_feature_governance_module()
@@ -1454,6 +1747,7 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
         "side_by_side_summary": side_by_side_summary,
         "calibration": calibration_payload,
         "drift": drift_payload,
+        "calibration_policy": calibration_policy_payload,
         "governance": governance_payload,
     }
 
@@ -1464,6 +1758,7 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
         "eval_report": str(report_path),
         "calibration": calibration_payload,
         "drift": drift_payload,
+        "calibration_policy": calibration_policy_payload,
         "governance": governance_payload,
     }
 
@@ -1476,6 +1771,9 @@ def stage_artifact(context: dict[str, Any]) -> dict[str, Any]:
     eval_output = stage_outputs.get("eval_report", {}) if isinstance(stage_outputs.get("eval_report", {}), dict) else {}
     calibration_output = eval_output.get("calibration", {}) if isinstance(eval_output.get("calibration", {}), dict) else {}
     drift_output = eval_output.get("drift", {}) if isinstance(eval_output.get("drift", {}), dict) else {}
+    calibration_policy_output = (
+        eval_output.get("calibration_policy", {}) if isinstance(eval_output.get("calibration_policy", {}), dict) else {}
+    )
     governance_output = eval_output.get("governance", {}) if isinstance(eval_output.get("governance", {}), dict) else {}
     governance_artifacts = (
         governance_output.get("artifacts", {}) if isinstance(governance_output.get("artifacts", {}), dict) else {}
@@ -1489,6 +1787,7 @@ def stage_artifact(context: dict[str, Any]) -> dict[str, Any]:
         "calibration_bins_csv": calibration_output.get("bins_csv"),
         "calibration_report_json": calibration_output.get("report_json"),
         "drift_regime_report_json": drift_output.get("report_json"),
+        "calibration_policy_report_json": calibration_policy_output.get("report_json"),
         "governance_ledger_csv": governance_artifacts.get("ledger_csv"),
         "ablation_report_json": governance_artifacts.get("ablation_report_json"),
         "men_model_pkl": train_genders.get("men", {}).get("model_path") if isinstance(train_genders.get("men", {}), dict) else None,

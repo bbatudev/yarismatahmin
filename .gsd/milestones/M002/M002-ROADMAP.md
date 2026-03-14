@@ -50,7 +50,7 @@ This milestone is complete only when all are true:
 - [x] **S01: Regime Drift Baseline & Signal Contract** `risk:high` `depends:[]`
   > After this: Canonical run `drift_regime_report.json` üretir ve Men/Women için rejim sinyalleri eval/artifact payload’ına bağlanır.
 
-- [ ] **S02: Regime-Aware Calibration Policy Engine** `risk:high` `depends:[S01]`
+- [x] **S02: Regime-Aware Calibration Policy Engine** `risk:high` `depends:[S01]`
   > After this: Kalibrasyon method seçimi policy kontratıyla deterministik yürür ve before/after kalite deltasını raporlar.
 
 - [ ] **S03: Governance Decision Fusion (Ablation + Drift + Calibration)** `risk:medium` `depends:[S01,S02]`

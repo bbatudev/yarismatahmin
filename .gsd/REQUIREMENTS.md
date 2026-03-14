@@ -12,16 +12,7 @@ Guidelines:
 
 ## Active
 
-### R014 — Advanced calibration policy by regime
-- Class: differentiator
-- Status: active
-- Description: Men/Women ve sezon rejimine göre isotonic/platt/none seçim politikasının sistematikleştirilmesi.
-- Why it matters: Kalibrasyon davranış ayrışmasını daha iyi yönetir.
-- Source: inferred
-- Primary owning slice: M002/S02
-- Supporting slices: M002/S01, M002/S03
-- Validation: mapped
-- Notes: S01 drift regime signal surface’i tamamlandı; policy coupling S02’de finalize edilecek.
+- none
 
 ## Validated
 
@@ -179,6 +170,17 @@ Guidelines:
 - Validation: validated by execution
 - Notes: S03’te notebook authority guard testi ile eğitim/persist primitive geri gelişi CI seviyesinde fail ediliyor.
 
+### R014 — Advanced calibration policy by regime
+- Class: differentiator
+- Status: validated
+- Description: Men/Women ve sezon rejimine göre isotonic/platt/none seçim politikasının sistematikleştirilmesi.
+- Why it matters: Kalibrasyon davranış ayrışmasını daha iyi yönetir.
+- Source: inferred
+- Primary owning slice: M002/S02
+- Supporting slices: M002/S01, M002/S03
+- Validation: validated by execution
+- Notes: S02’de `calibration_policy_report.json` + `stage_outputs.eval_report.calibration_policy` contract’ı test-suite ve `m002_s02_policy_smoke` runtime proof ile doğrulandı.
+
 ## Deferred
 
 ### R013 — Hyperparameter optimization (Optuna)
@@ -243,7 +245,7 @@ Guidelines:
 | R010 | launchability | validated | M001/S06 | M001/S07 | validated (S06 artifact contract report + required-file fail-fast checks in runtime and tests) |
 | R011 | continuity | validated | M001/S06 | none | validated (S06 reproducibility report with same commit+seed tolerance pass/fail enforcement) |
 | R012 | integration | validated | M001/S07 | M003/S01 | validated (S07 submission stage runtime proof + strict `ID,Pred` validation report checks) |
-| R014 | differentiator | active | M002/S02 | M002/S01,S03 | mapped |
+| R014 | differentiator | validated | M002/S02 | M002/S01,S03 | validated (S02 policy report contract + canonical smoke proof) |
 | R018 | failure-visibility | validated | M001/S06 | M002/S01 | validated (S06 regression gate report with blocking/non-blocking policy and runtime enforcement) |
 | R019 | constraint | validated | M001/S03 | M001/S07 | validated (S03 notebook authority guardrail test) |
 | R013 | quality-attribute | deferred | M002/S02 | none | unmapped |
@@ -253,7 +255,7 @@ Guidelines:
 
 ## Coverage Summary
 
-- Active requirements: 1
-- Mapped to slices: 1
-- Validated: 14
+- Active requirements: 0
+- Mapped to slices: 0
+- Validated: 15
 - Unmapped active requirements: 0
