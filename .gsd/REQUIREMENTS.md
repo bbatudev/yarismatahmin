@@ -13,17 +13,6 @@ Guidelines:
 ## Active
 
 
-### R007 — Calibration + overconfidence/drift report
-- Class: quality-attribute
-- Status: active
-- Description: Calibration bins CSV + ECE veya W-MAE + üst olasılık binlerinde gerçekleşme farkı (overconfidence/drift özeti) üretilir.
-- Why it matters: Brier hedefi için olasılık güvenilirliğini görünür ve yönetilebilir yapar.
-- Source: user
-- Primary owning slice: M001/S04
-- Supporting slices: M001/S06
-- Validation: mapped
-- Notes: Sadece bins çıktısı yeterli sayılmaz.
-
 ### R008 — Feature governance ledger
 - Class: operability
 - Status: active
@@ -158,6 +147,17 @@ Guidelines:
 - Validation: validated by execution
 - Notes: S03 canonical runtime’da `eval_report.json` içine `metrics_table` + `side_by_side_summary` kontratıyla doğrulandı.
 
+### R007 — Calibration + overconfidence/drift report
+- Class: quality-attribute
+- Status: validated
+- Description: Calibration bins CSV + ECE veya W-MAE + üst olasılık binlerinde gerçekleşme farkı (overconfidence/drift özeti) üretilir.
+- Why it matters: Brier hedefi için olasılık güvenilirliğini görünür ve yönetilebilir yapar.
+- Source: user
+- Primary owning slice: M001/S04
+- Supporting slices: M001/S06
+- Validation: validated by execution
+- Notes: S04 canonical run (`20260314T161222Z_s04_calibration_smoke`) ile `calibration_bins.csv` + `calibration_report.json` artifact’ları, `eval_report.json.calibration` wiring’i ve empty-band diagnostics sözleşmesi doğrulandı.
+
 ### R019 — Single execution path enforcement
 - Class: constraint
 - Status: validated
@@ -238,7 +238,7 @@ Guidelines:
 | R004 | compliance/security | validated | M001/S02 | M001/S07 | validated (S02 leakage fail-fast + blocking_rule diagnostics + metadata persistence) |
 | R005 | core-capability | validated | M001/S03 | M001/S04 | validated (S03 unified core + separate men/women artifacts) |
 | R006 | failure-visibility | validated | M001/S03 | M001/S06 | validated (S03 metrics_table + side_by_side_summary runtime contract) |
-| R007 | quality-attribute | active | M001/S04 | M001/S06 | mapped |
+| R007 | quality-attribute | validated | M001/S04 | M001/S06 | validated (S04 calibration contract tests + canonical smoke run artifacts and eval wiring checks) |
 | R008 | operability | active | M001/S05 | M001/S06 | mapped |
 | R009 | quality-attribute | active | M001/S05 | M002/S01 | mapped |
 | R010 | launchability | active | M001/S06 | M001/S07 | mapped |
@@ -254,7 +254,7 @@ Guidelines:
 
 ## Coverage Summary
 
-- Active requirements: 7
-- Mapped to slices: 7
-- Validated: 7
+- Active requirements: 6
+- Mapped to slices: 6
+- Validated: 8
 - Unmapped active requirements: 0

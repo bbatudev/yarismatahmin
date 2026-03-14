@@ -6,6 +6,9 @@ import json
 import os
 import pickle
 import re
+
+import numpy as np
+import pandas as pd
 import subprocess
 import sys
 import time
@@ -22,6 +25,19 @@ REPO_ROOT = PIPELINE_DIR.parent
 DEFAULT_ARTIFACTS_ROOT = PIPELINE_DIR / "artifacts" / "runs"
 
 CANONICAL_STAGES = ("feature", "train", "eval_report", "artifact")
+CANONICAL_SPLITS = ("Train", "Val", "Test")
+CALIBRATION_BIN_EDGES = tuple(round(step / 10, 1) for step in range(11))
+CALIBRATION_BINS_COLUMNS = (
+    "gender",
+    "split",
+    "bin_left",
+    "bin_right",
+    "sample_count",
+    "pred_mean",
+    "actual_rate",
+    "gap",
+)
+HIGH_PROB_THRESHOLD = 0.8
 
 
 def _now_utc_iso() -> str:
@@ -367,6 +383,166 @@ def stage_train(context: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _safe_delta(left: Any, right: Any) -> float | None:
+    if isinstance(left, (int, float)) and isinstance(right, (int, float)):
+        return float(left - right)
+    return None
+
+
+def _resolve_feature_path_for_gender(context: dict[str, Any], gender_key: str) -> Path:
+    feature_outputs = context.get("stage_outputs", {}).get("feature", {}).get("outputs", {})
+    output_key = f"{gender_key}_features"
+    from_stage = feature_outputs.get(output_key)
+    if isinstance(from_stage, str) and from_stage.strip():
+        resolved = Path(from_stage).resolve()
+        if resolved.exists():
+            return resolved
+
+    fallback_name = "processed_features_men.csv" if gender_key == "men" else "processed_features_women.csv"
+    fallback = (PIPELINE_DIR / "artifacts" / "data" / fallback_name).resolve()
+    if fallback.exists():
+        return fallback
+
+    raise RuntimeError(
+        f"[{gender_key}] canonical feature file not found. "
+        f"Checked stage output key '{output_key}' and fallback '{fallback}'."
+    )
+
+
+def _extract_positive_class_probabilities(raw_probs: Any, *, gender_key: str, split_label: str) -> np.ndarray:
+    probs_array = np.asarray(raw_probs)
+    if probs_array.ndim == 2:
+        if probs_array.shape[1] < 2:
+            raise RuntimeError(
+                f"[{gender_key}] split={split_label} predict_proba returned shape={probs_array.shape}; expected >=2 columns."
+            )
+        values = probs_array[:, 1]
+    elif probs_array.ndim == 1:
+        values = probs_array
+    else:
+        raise RuntimeError(
+            f"[{gender_key}] split={split_label} predict_proba returned ndim={probs_array.ndim}; expected 1 or 2."
+        )
+
+    return np.clip(values.astype(float), 0.0, 1.0)
+
+
+def _build_calibration_rows_and_summary(
+    *,
+    gender_key: str,
+    split_label: str,
+    y_true: np.ndarray,
+    y_prob: np.ndarray,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    edges = np.asarray(CALIBRATION_BIN_EDGES, dtype=float)
+    rows: list[dict[str, Any]] = []
+
+    if y_true.shape[0] != y_prob.shape[0]:
+        raise RuntimeError(
+            f"[{gender_key}] split={split_label} label/probability length mismatch: "
+            f"y_true={y_true.shape[0]} y_prob={y_prob.shape[0]}"
+        )
+
+    sample_count = int(y_true.shape[0])
+    if sample_count == 0:
+        for idx in range(len(edges) - 1):
+            rows.append(
+                {
+                    "gender": gender_key,
+                    "split": split_label,
+                    "bin_left": float(edges[idx]),
+                    "bin_right": float(edges[idx + 1]),
+                    "sample_count": 0,
+                    "pred_mean": None,
+                    "actual_rate": None,
+                    "gap": None,
+                }
+            )
+        return rows, {
+            "sample_count": 0,
+            "non_empty_bins": 0,
+            "ece": None,
+            "wmae": None,
+            "reason": "split_empty",
+            "high_prob_band": {
+                "threshold": HIGH_PROB_THRESHOLD,
+                "sample_count": 0,
+                "pred_mean": None,
+                "actual_rate": None,
+                "gap": None,
+                "reason": "split_empty",
+            },
+        }
+
+    bin_indices = np.searchsorted(edges, y_prob, side="right") - 1
+    bin_indices = np.clip(bin_indices, 0, len(edges) - 2)
+
+    non_empty_bins = 0
+    weighted_abs_gap_sum = 0.0
+
+    for idx in range(len(edges) - 1):
+        in_bin = bin_indices == idx
+        bin_count = int(np.sum(in_bin))
+
+        pred_mean: float | None = None
+        actual_rate: float | None = None
+        gap: float | None = None
+
+        if bin_count > 0:
+            non_empty_bins += 1
+            pred_mean = float(np.mean(y_prob[in_bin]))
+            actual_rate = float(np.mean(y_true[in_bin]))
+            gap = float(pred_mean - actual_rate)
+            weighted_abs_gap_sum += bin_count * abs(gap)
+
+        rows.append(
+            {
+                "gender": gender_key,
+                "split": split_label,
+                "bin_left": float(edges[idx]),
+                "bin_right": float(edges[idx + 1]),
+                "sample_count": bin_count,
+                "pred_mean": pred_mean,
+                "actual_rate": actual_rate,
+                "gap": gap,
+            }
+        )
+
+    weighted_abs_gap = float(weighted_abs_gap_sum / sample_count)
+
+    high_prob_mask = y_prob >= HIGH_PROB_THRESHOLD
+    high_prob_count = int(np.sum(high_prob_mask))
+    if high_prob_count == 0:
+        high_prob_band = {
+            "threshold": HIGH_PROB_THRESHOLD,
+            "sample_count": 0,
+            "pred_mean": None,
+            "actual_rate": None,
+            "gap": None,
+            "reason": "empty_high_prob_band",
+        }
+    else:
+        high_pred_mean = float(np.mean(y_prob[high_prob_mask]))
+        high_actual_rate = float(np.mean(y_true[high_prob_mask]))
+        high_prob_band = {
+            "threshold": HIGH_PROB_THRESHOLD,
+            "sample_count": high_prob_count,
+            "pred_mean": high_pred_mean,
+            "actual_rate": high_actual_rate,
+            "gap": float(high_pred_mean - high_actual_rate),
+            "reason": None,
+        }
+
+    return rows, {
+        "sample_count": sample_count,
+        "non_empty_bins": non_empty_bins,
+        "ece": weighted_abs_gap,
+        "wmae": weighted_abs_gap,
+        "reason": None,
+        "high_prob_band": high_prob_band,
+    }
+
+
 def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
     train_result = context.get("stage_outputs", {}).get("train", {})
     metrics_by_split = train_result.get("metrics_by_split", {})
@@ -374,10 +550,14 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(metrics_by_split, dict):
         raise RuntimeError("Train stage output missing metrics_by_split contract.")
 
+    genders_payload = train_result.get("genders", {})
+    if not isinstance(genders_payload, dict):
+        raise RuntimeError("Train stage output missing genders contract required for calibration scoring.")
+
     metrics_table: list[dict[str, Any]] = []
     for gender_key in ("men", "women"):
         gender_metrics = metrics_by_split.get(gender_key, {})
-        for split_label in ("Train", "Val", "Test"):
+        for split_label in CANONICAL_SPLITS:
             split_metrics = gender_metrics.get(split_label, {})
             metrics_table.append(
                 {
@@ -388,11 +568,6 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
                     "auc": split_metrics.get("auc"),
                 }
             )
-
-    def _safe_delta(left: Any, right: Any) -> float | None:
-        if isinstance(left, (int, float)) and isinstance(right, (int, float)):
-            return float(left - right)
-        return None
 
     men_test = metrics_by_split.get("men", {}).get("Test", {})
     women_test = metrics_by_split.get("women", {}).get("Test", {})
@@ -409,6 +584,99 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
         "delta_test_auc": _safe_delta(men_test.get("auc"), women_test.get("auc")),
     }
 
+    calibration_rows: list[dict[str, Any]] = []
+    calibration_summary: dict[str, dict[str, Any]] = {"men": {}, "women": {}}
+
+    for gender_key in ("men", "women"):
+        gender_payload = genders_payload.get(gender_key)
+        if not isinstance(gender_payload, dict):
+            raise RuntimeError(f"[{gender_key}] train payload missing under stage_outputs.train.genders")
+
+        model_path_value = gender_payload.get("model_path")
+        if not isinstance(model_path_value, str) or not model_path_value.strip():
+            raise RuntimeError(f"[{gender_key}] model_path missing in train payload")
+
+        feature_snapshot = gender_payload.get("feature_snapshot", {})
+        feature_columns = feature_snapshot.get("feature_columns") if isinstance(feature_snapshot, dict) else None
+        if not isinstance(feature_columns, list) or not feature_columns:
+            raise RuntimeError(f"[{gender_key}] feature_snapshot.feature_columns missing or empty")
+
+        model_path = Path(model_path_value)
+        if not model_path.exists():
+            raise RuntimeError(f"[{gender_key}] model_path not found: {model_path}")
+
+        with model_path.open("rb") as handle:
+            model = pickle.load(handle)
+
+        if not hasattr(model, "predict_proba"):
+            raise RuntimeError(f"[{gender_key}] loaded model does not implement predict_proba")
+
+        features_path = _resolve_feature_path_for_gender(context, gender_key)
+        feature_df = pd.read_csv(features_path)
+
+        missing_columns = [col for col in feature_columns if col not in feature_df.columns]
+        if missing_columns:
+            preview = ", ".join(missing_columns[:8])
+            raise RuntimeError(
+                f"[{gender_key}] feature column mismatch for calibration scoring. "
+                f"missing_count={len(missing_columns)} missing={preview}"
+            )
+
+        required_columns = {"Split", "Target"}
+        missing_required = sorted(required_columns - set(feature_df.columns))
+        if missing_required:
+            raise RuntimeError(f"[{gender_key}] feature file missing required columns: {missing_required}")
+
+        for split_label in CANONICAL_SPLITS:
+            split_df = feature_df[feature_df["Split"] == split_label].copy()
+            if split_df.empty:
+                split_true = np.asarray([], dtype=float)
+                split_prob = np.asarray([], dtype=float)
+            else:
+                split_features = split_df.loc[:, feature_columns]
+                split_true = split_df["Target"].to_numpy(dtype=float)
+                try:
+                    raw_probs = model.predict_proba(split_features)
+                except Exception as exc:
+                    raise RuntimeError(f"[{gender_key}] split={split_label} predict_proba failed: {exc}") from exc
+                split_prob = _extract_positive_class_probabilities(
+                    raw_probs,
+                    gender_key=gender_key,
+                    split_label=split_label,
+                )
+
+            split_rows, split_summary = _build_calibration_rows_and_summary(
+                gender_key=gender_key,
+                split_label=split_label,
+                y_true=split_true,
+                y_prob=split_prob,
+            )
+            calibration_rows.extend(split_rows)
+            calibration_summary[gender_key][split_label] = split_summary
+
+    calibration_bins_df = pd.DataFrame(calibration_rows, columns=CALIBRATION_BINS_COLUMNS)
+    calibration_bins_path = Path(context["run_dir"]) / "calibration_bins.csv"
+    calibration_bins_df.to_csv(calibration_bins_path, index=False)
+
+    calibration_report_payload = {
+        "run_id": context["run_id"],
+        "seed": context["seed"],
+        "generated_at": _now_utc_iso(),
+        "bin_edges": list(CALIBRATION_BIN_EDGES),
+        "high_prob_threshold": HIGH_PROB_THRESHOLD,
+        "calibration_summary": calibration_summary,
+    }
+    calibration_report_path = Path(context["run_dir"]) / "calibration_report.json"
+    _write_json(calibration_report_path, calibration_report_payload)
+
+    calibration_payload = {
+        "bins_csv": str(calibration_bins_path),
+        "report_json": str(calibration_report_path),
+        "bin_edges": list(CALIBRATION_BIN_EDGES),
+        "high_prob_threshold": HIGH_PROB_THRESHOLD,
+        "calibration_summary": calibration_summary,
+    }
+
     report_payload = {
         "run_id": context["run_id"],
         "seed": context["seed"],
@@ -417,6 +685,7 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
         "feature_snapshot": train_result.get("feature_snapshot", {}),
         "metrics_table": metrics_table,
         "side_by_side_summary": side_by_side_summary,
+        "calibration": calibration_payload,
     }
 
     report_path = Path(context["run_dir"]) / "eval_report.json"
@@ -424,6 +693,7 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "eval_report": str(report_path),
+        "calibration": calibration_payload,
     }
 
 

@@ -3,11 +3,29 @@ import json
 import types
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
 import pytest
 
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "run_pipeline.py"
 CANONICAL_STAGES = ("feature", "train", "eval_report", "artifact")
+
+
+class DummyProbModel:
+    def __init__(self, feature_name: str, bias: float = 0.0):
+        self.feature_name = feature_name
+        self.bias = float(bias)
+
+    def predict_proba(self, X):
+        if hasattr(X, "__getitem__"):
+            feature_values = np.asarray(X[self.feature_name], dtype=float)
+        else:
+            feature_values = np.asarray(X, dtype=float)
+
+        logits = feature_values + self.bias
+        probs = 1.0 / (1.0 + np.exp(-logits))
+        return np.column_stack([1.0 - probs, probs])
 
 
 def _load_run_pipeline_module():
@@ -51,6 +69,30 @@ def _sample_split_metrics(offset: float) -> dict:
     }
 
 
+def _write_feature_inputs(tmp_path: Path) -> tuple[Path, Path]:
+    men_path = tmp_path / "processed_features_men.csv"
+    women_path = tmp_path / "processed_features_women.csv"
+
+    men_df = pd.DataFrame(
+        {
+            "Split": ["Train", "Train", "Val", "Val", "Test", "Test"],
+            "Target": [1, 1, 1, 0, 1, 0],
+            "NetRtg_diff": [2.2, 1.4, 0.7, -0.8, 1.1, -1.3],
+        }
+    )
+    women_df = pd.DataFrame(
+        {
+            "Split": ["Train", "Train", "Val", "Val", "Test", "Test"],
+            "Target": [1, 1, 0, 0, 1, 0],
+            "SeedNum_diff": [1.8, 1.2, 0.4, -0.4, 0.9, -0.9],
+        }
+    )
+
+    men_df.to_csv(men_path, index=False)
+    women_df.to_csv(women_path, index=False)
+    return men_path, women_path
+
+
 def _stub_train_module(tmp_path: Path):
     module = types.SimpleNamespace()
     module.DATA_DIR = ""
@@ -68,14 +110,15 @@ def _stub_train_module(tmp_path: Path):
                 "feature_snapshot": {"feature_columns": ["NetRtg_diff"], "feature_count": 1},
                 "best_iteration": 17,
             }
-        else:
-            payload = {
-                "gender": "W",
-                "metrics_by_split": _sample_split_metrics(0.05),
-                "feature_snapshot": {"feature_columns": ["SeedNum_diff"], "feature_count": 1},
-                "best_iteration": 11,
-            }
-        return {"model_for": gender}, payload
+            return DummyProbModel(feature_name="NetRtg_diff", bias=0.2), payload
+
+        payload = {
+            "gender": "W",
+            "metrics_by_split": _sample_split_metrics(0.05),
+            "feature_snapshot": {"feature_columns": ["SeedNum_diff"], "feature_count": 1},
+            "best_iteration": 11,
+        }
+        return DummyProbModel(feature_name="SeedNum_diff", bias=-0.1), payload
 
     module.load_data = _load_data
     module.train_baseline = _train_baseline
@@ -162,6 +205,8 @@ def test_stage_eval_report_writes_metrics_table_and_side_by_side_summary(tmp_pat
         raising=False,
     )
 
+    men_features, women_features = _write_feature_inputs(tmp_path)
+
     run_dir = tmp_path / "run"
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -174,7 +219,11 @@ def test_stage_eval_report_writes_metrics_table_and_side_by_side_summary(tmp_pat
                 "gates": {
                     "men": {"pass": True, "blocking_rule": None, "reason": "ok"},
                     "women": {"pass": True, "blocking_rule": None, "reason": "ok"},
-                }
+                },
+                "outputs": {
+                    "men_features": str(men_features),
+                    "women_features": str(women_features),
+                },
             }
         },
     }
@@ -190,6 +239,11 @@ def test_stage_eval_report_writes_metrics_table_and_side_by_side_summary(tmp_pat
     side = report["side_by_side_summary"]
     assert {"men_test_brier", "women_test_brier", "delta_test_brier"}.issubset(side.keys())
     assert side["delta_test_brier"] == pytest.approx(side["men_test_brier"] - side["women_test_brier"])
+
+    assert "calibration" in report
+    assert "calibration" in eval_result
+    assert Path(report["calibration"]["bins_csv"]).exists()
+    assert Path(report["calibration"]["report_json"]).exists()
 
 
 def test_main_stops_in_train_stage_when_feature_gate_payload_blocks(tmp_path, monkeypatch):

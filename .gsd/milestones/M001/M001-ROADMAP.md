@@ -58,7 +58,7 @@ This milestone is complete only when all are true:
 - [x] **S03: Unified Men/Women Eval Core + Single Execution Path Enforcement** `risk:high` `depends:[S02]`
   > After this: Men/Women metrik tablosu + side-by-side özet üretilir ve eğitim yolu script-first tek gerçeklikte kilitlenir.
 
-- [ ] **S04: Calibration Layer + Overconfidence/Drift Reporting** `risk:high` `depends:[S03]`
+- [x] **S04: Calibration Layer + Overconfidence/Drift Reporting** `risk:high` `depends:[S03]`
   > After this: calibration bins + ECE/W-MAE + üst olasılık bin sapma özeti çıkar.
 
 - [ ] **S05: Feature Governance + Controlled Ablation** `risk:medium` `depends:[S03]`

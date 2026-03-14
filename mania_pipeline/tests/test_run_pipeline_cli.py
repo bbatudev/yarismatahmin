@@ -133,6 +133,16 @@ def _install_stubbed_stages(module, monkeypatch, failing_stage=None):
                         },
                         "best_iteration": {"men": 11, "women": 9},
                     }
+                if stage_name == "eval_report":
+                    return {
+                        "eval_report": "reports/eval_report.json",
+                        "calibration": {
+                            "bins_csv": "reports/calibration_bins.csv",
+                            "report_json": "reports/calibration_report.json",
+                        },
+                    }
+                if stage_name == "artifact":
+                    return {"manifest": "reports/artifact_manifest.json", "file_count": 4}
                 return {"stage": stage_name}
 
             handlers[stage] = _ok
@@ -148,6 +158,11 @@ def test_run_pipeline_script_exists_for_cli_contract_testing():
         f"Missing canonical orchestrator script: {SCRIPT_PATH}. "
         "Implement it in T02."
     )
+
+
+
+def test_cli_canonical_stage_topology_remains_locked(run_pipeline_module):
+    assert tuple(getattr(run_pipeline_module, "CANONICAL_STAGES", ())) == CANONICAL_STAGES
 
 
 
@@ -167,10 +182,19 @@ def test_cli_writes_started_and_succeeded_events_with_contract_fields(tmp_path, 
     metadata = json.loads((run_dir / "run_metadata.json").read_text(encoding="utf-8"))
     assert metadata["seed"] == 17, "CLI seed must propagate into run metadata"
 
+    assert list(metadata["stage_outputs"].keys()) == list(CANONICAL_STAGES), (
+        "stage_outputs should preserve canonical topology order"
+    )
+    assert "calibration" not in metadata["stage_outputs"], "calibration must remain eval_report payload, not a stage"
+
     train_payload = metadata["stage_outputs"]["train"]
     assert {"metrics_by_split", "feature_snapshot", "models"}.issubset(train_payload.keys())
     assert train_payload["metrics_by_split"]["men"]["Test"]["brier"] == pytest.approx(0.22)
     assert train_payload["metrics_by_split"]["women"]["Test"]["brier"] == pytest.approx(0.26)
+
+    eval_payload = metadata["stage_outputs"]["eval_report"]
+    assert "calibration" in eval_payload
+    assert set(eval_payload["calibration"].keys()) == {"bins_csv", "report_json"}
 
     events = _read_jsonl(run_dir / "stage_events.jsonl")
     _assert_event_contract(events)

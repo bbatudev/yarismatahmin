@@ -1,0 +1,299 @@
+{
+  "run_id": "20260314T161222Z_s04_calibration_smoke",
+  "seed": 42,
+  "generated_at": "2026-03-14T16:13:10.246343Z",
+  "models": {
+    "men": "C:\\Users\\Gaming\\Desktop\\projects\\yarismatahmin\\mania_pipeline\\artifacts\\models\\lgbm_baseline_men_20260314T161222Z_s04_calibration_smoke.pkl",
+    "women": "C:\\Users\\Gaming\\Desktop\\projects\\yarismatahmin\\mania_pipeline\\artifacts\\models\\lgbm_baseline_women_20260314T161222Z_s04_calibration_smoke.pkl"
+  },
+  "feature_snapshot": {
+    "men": {
+      "feature_columns": [
+        "WinPct_diff",
+        "AvgScore_diff",
+        "AvgOppScore_diff",
+        "TotalScore_diff",
+        "TrueMarginAvg_diff",
+        "ScoreVariance_diff",
+        "OTRate_diff",
+        "AvgOT_diff",
+        "MultiOTRate_diff",
+        "CloseWinPct_diff",
+        "CloseGamesCount_diff",
+        "NetRtg_diff",
+        "eFG_diff",
+        "TOVpct_diff",
+        "ORBpct_diff",
+        "FTr_diff",
+        "FTr_vs_OppAllowed_diff",
+        "StlPct_diff",
+        "BlkPct_diff",
+        "WinPct_last7_diff",
+        "WinPct_last10_diff",
+        "WinPct_last14_diff",
+        "WinPct_last21_diff",
+        "Margin_last7_diff",
+        "Margin_last10_diff",
+        "Margin_last14_diff",
+        "Margin_last21_diff",
+        "DaysSinceLastGame_diff",
+        "GamesLast7Days_diff",
+        "GamesLast14Days_diff",
+        "B2B_Last14Days_diff",
+        "SeedNum_diff",
+        "ConfStrength_diff",
+        "ConfWinPct_diff",
+        "ConfTeamCount_diff",
+        "ConfBidCount_diff",
+        "ConfTourneyGamesPlayed_diff",
+        "ConfTourneyWinPct_diff",
+        "ConfTourneyChampion_diff",
+        "DaysSinceConfFinal_diff",
+        "CoachTenureYears_diff",
+        "ProgramAge_diff",
+        "MasseyPct_diff",
+        "MasseyAvgRank_diff",
+        "Heavy_Favorite",
+        "Toss_Up",
+        "TeamA_Is_Favorite",
+        "TeamA_Is_Underdog",
+        "TeamA_Seed_Top4",
+        "TeamA_Seed_Mid",
+        "TeamA_Seed_Low",
+        "TeamA_Is_11_12_vs_5_6",
+        "TeamA_Is_5_6_vs_11_12",
+        "Round_Num",
+        "Is_FirstWeekend",
+        "Is_SecondWeekend",
+        "Is_FinalWeekend"
+      ],
+      "feature_count": 57
+    },
+    "women": {
+      "feature_columns": [
+        "WinPct_diff",
+        "AvgScore_diff",
+        "AvgOppScore_diff",
+        "TotalScore_diff",
+        "TrueMarginAvg_diff",
+        "ScoreVariance_diff",
+        "OTRate_diff",
+        "AvgOT_diff",
+        "MultiOTRate_diff",
+        "CloseWinPct_diff",
+        "CloseGamesCount_diff",
+        "NetRtg_diff",
+        "eFG_diff",
+        "TOVpct_diff",
+        "ORBpct_diff",
+        "FTr_vs_OppAllowed_diff",
+        "StlPct_diff",
+        "BlkPct_diff",
+        "WinPct_last7_diff",
+        "WinPct_last10_diff",
+        "WinPct_last14_diff",
+        "WinPct_last21_diff",
+        "Margin_last7_diff",
+        "Margin_last10_diff",
+        "Margin_last14_diff",
+        "Margin_last21_diff",
+        "DaysSinceLastGame_diff",
+        "GamesLast7Days_diff",
+        "GamesLast14Days_diff",
+        "B2B_Last14Days_diff",
+        "SeedNum_diff",
+        "ConfStrength_diff",
+        "ConfWinPct_diff",
+        "ConfTeamCount_diff",
+        "ConfBidCount_diff",
+        "ConfTourneyGamesPlayed_diff",
+        "ConfTourneyWinPct_diff",
+        "ConfTourneyChampion_diff",
+        "DaysSinceConfFinal_diff",
+        "Heavy_Favorite",
+        "Toss_Up",
+        "TeamA_Is_Favorite",
+        "TeamA_Is_Underdog",
+        "TeamA_Seed_Top4",
+        "TeamA_Seed_Mid",
+        "TeamA_Seed_Low",
+        "TeamA_Is_11_12_vs_5_6",
+        "TeamA_Is_5_6_vs_11_12",
+        "Round_Num",
+        "Is_FirstWeekend",
+        "Is_SecondWeekend",
+        "Is_FinalWeekend"
+      ],
+      "feature_count": 52
+    }
+  },
+  "metrics_table": [
+    {
+      "gender": "men",
+      "split": "Train",
+      "brier": 0.11829813190296143,
+      "logloss": 0.39652265996552233,
+      "auc": 0.9449446036735701
+    },
+    {
+      "gender": "men",
+      "split": "Val",
+      "brier": 0.20369523388934746,
+      "logloss": 0.5953814004990943,
+      "auc": 0.7488304744932057
+    },
+    {
+      "gender": "men",
+      "split": "Test",
+      "brier": 0.18175050076078456,
+      "logloss": 0.5381222738302219,
+      "auc": 0.8022388059701493
+    },
+    {
+      "gender": "women",
+      "split": "Train",
+      "brier": 0.09286447083136218,
+      "logloss": 0.33659105960651875,
+      "auc": 0.9734046052631579
+    },
+    {
+      "gender": "women",
+      "split": "Val",
+      "brier": 0.17283585124268702,
+      "logloss": 0.5137395886873163,
+      "auc": 0.8204499888616619
+    },
+    {
+      "gender": "women",
+      "split": "Test",
+      "brier": 0.14223205049047852,
+      "logloss": 0.44633879320997155,
+      "auc": 0.8927378035197148
+    }
+  ],
+  "side_by_side_summary": {
+    "men_test_brier": 0.18175050076078456,
+    "women_test_brier": 0.14223205049047852,
+    "delta_test_brier": 0.03951845027030604,
+    "men_test_logloss": 0.5381222738302219,
+    "women_test_logloss": 0.44633879320997155,
+    "delta_test_logloss": 0.09178348062025038,
+    "men_test_auc": 0.8022388059701493,
+    "women_test_auc": 0.8927378035197148,
+    "delta_test_auc": -0.09049899754956547
+  },
+  "calibration": {
+    "bins_csv": "C:\\Users\\Gaming\\Desktop\\projects\\yarismatahmin\\mania_pipeline\\artifacts\\runs\\20260314T161222Z_s04_calibration_smoke\\calibration_bins.csv",
+    "report_json": "C:\\Users\\Gaming\\Desktop\\projects\\yarismatahmin\\mania_pipeline\\artifacts\\runs\\20260314T161222Z_s04_calibration_smoke\\calibration_report.json",
+    "bin_edges": [
+      0.0,
+      0.1,
+      0.2,
+      0.3,
+      0.4,
+      0.5,
+      0.6,
+      0.7,
+      0.8,
+      0.9,
+      1.0
+    ],
+    "high_prob_threshold": 0.8,
+    "calibration_summary": {
+      "men": {
+        "Train": {
+          "sample_count": 2496,
+          "non_empty_bins": 10,
+          "ece": 0.14885862131857253,
+          "wmae": 0.14885862131857253,
+          "reason": null,
+          "high_prob_band": {
+            "threshold": 0.8,
+            "sample_count": 359,
+            "pred_mean": 0.8747223368617151,
+            "actual_rate": 0.9888579387186629,
+            "gap": -0.11413560185694782,
+            "reason": null
+          }
+        },
+        "Val": {
+          "sample_count": 134,
+          "non_empty_bins": 10,
+          "ece": 0.06550790938844468,
+          "wmae": 0.06550790938844468,
+          "reason": null,
+          "high_prob_band": {
+            "threshold": 0.8,
+            "sample_count": 18,
+            "pred_mean": 0.8686071113563577,
+            "actual_rate": 0.8333333333333334,
+            "gap": 0.03527377802302434,
+            "reason": null
+          }
+        },
+        "Test": {
+          "sample_count": 268,
+          "non_empty_bins": 10,
+          "ece": 0.03666216310882713,
+          "wmae": 0.03666216310882713,
+          "reason": null,
+          "high_prob_band": {
+            "threshold": 0.8,
+            "sample_count": 35,
+            "pred_mean": 0.8758986982476453,
+            "actual_rate": 0.9142857142857143,
+            "gap": -0.03838701603806893,
+            "reason": null
+          }
+        }
+      },
+      "women": {
+        "Train": {
+          "sample_count": 1520,
+          "non_empty_bins": 8,
+          "ece": 0.16825553550717318,
+          "wmae": 0.16825553550717318,
+          "reason": null,
+          "high_prob_band": {
+            "threshold": 0.8,
+            "sample_count": 317,
+            "pred_mean": 0.863158842131862,
+            "actual_rate": 0.9873817034700315,
+            "gap": -0.12422286133816951,
+            "reason": null
+          }
+        },
+        "Val": {
+          "sample_count": 134,
+          "non_empty_bins": 8,
+          "ece": 0.07195276002543718,
+          "wmae": 0.07195276002543718,
+          "reason": null,
+          "high_prob_band": {
+            "threshold": 0.8,
+            "sample_count": 22,
+            "pred_mean": 0.8663141334090297,
+            "actual_rate": 0.9545454545454546,
+            "gap": -0.08823132113642485,
+            "reason": null
+          }
+        },
+        "Test": {
+          "sample_count": 268,
+          "non_empty_bins": 8,
+          "ece": 0.07932069009529348,
+          "wmae": 0.07932069009529348,
+          "reason": null,
+          "high_prob_band": {
+            "threshold": 0.8,
+            "sample_count": 44,
+            "pred_mean": 0.8636836976300131,
+            "actual_rate": 0.9772727272727273,
+            "gap": -0.11358902964271422,
+            "reason": null
+          }
+        }
+      }
+    }
+  }
+}
