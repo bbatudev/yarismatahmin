@@ -10,7 +10,7 @@ Tek komutla çalışan, tek gerçeklik üreten, tekrar üretilebilir ve kararlar
 
 ## Current State
 
-S01+S02+S03+S04+S05+S06 tamamlandı: canonical orchestrator (`mania_pipeline/scripts/run_pipeline.py`) tek komutla `feature -> train -> eval_report -> artifact` zincirini çalıştırıyor, `feature` stage içinde split/leakage gate’lerini fail-fast enforce ediyor ve `train` stage gate-pass precondition olmadan başlamıyor. Men/Women eğitim/eval tek çekirdek kontratta birleşmiş durumda: `run_metadata.json -> stage_outputs.train` altında per-gender model + `metrics_by_split` + `feature_snapshot` persist ediliyor; `eval_report.json` normalize `metrics_table` + `side_by_side_summary` yanında `calibration` ve `governance` payload’larını taşıyor. S04 ile `calibration_bins.csv` + `calibration_report.json` artifact’ları ve high-prob (`p>=0.8`) overconfidence/drift diagnostics canonical run çıktısına bağlandı; S05 ile `governance_ledger.csv` + `ablation_report.json` artifact’ları, deterministic suspicious-group ablation deltası ve reason-coded skip diagnostics (`group_missing|no_gender_features|split_empty|empty_high_prob_band`) eval-stage contract’ına eklendi; S06 ile artifact-stage contract/gate katmanı (`artifact_contract_report.json`, `reproducibility_report.json`, `regression_gate_report.json`) devreye alındı ve blocking breach durumları stage-level fail semantics ile enforce edilmeye başladı. Notebook eğitim otoritesi teknik olarak kapalı (`03_model_training.ipynb` reporting-only + guard tests). Kalan ana işler: S07 submission validation.
+S01+S02+S03+S04+S05+S06+S07 tamamlandı ve M001 kapandı: canonical orchestrator (`mania_pipeline/scripts/run_pipeline.py`) tek komutla `feature -> train -> eval_report -> artifact` zincirini çalıştırıyor, split/leakage gate’leri fail-fast enforce ediyor, train/eval kalibrasyon/governance kontratlarını machine-readable artifact’larla persist ediyor ve artifact stage’de contract/gate katmanı (`artifact_contract_report.json`, `reproducibility_report.json`, `regression_gate_report.json`) ile blocking breach durumlarını stage-level fail semantics ile yönetiyor. S07 ile optional submission branch’i (`--submission-stage stage1|stage2`) eklendi; `submission_<stage>.csv` + `submission_validation_report.json` strict `ID,Pred` schema/range/null doğrulamasıyla canonical run’a bağlandı. Notebook eğitim otoritesi teknik olarak kapalı (`03_model_training.ipynb` reporting-only + guard tests). Sonraki ana işler M002 kapsamı: probability quality tuning, rejim bazlı calibration policy ve governance karar kalitesinin geliştirilmesi.
 
 ## Architecture / Key Patterns
 
@@ -27,6 +27,6 @@ See `.gsd/REQUIREMENTS.md` for the explicit capability contract, requirement sta
 
 ## Milestone Sequence
 
-- [ ] M001: Canonical Foundation — Tek execution path, leakage-safe eval, reproducible baseline ve run contract
+- [x] M001: Canonical Foundation — Tek execution path, leakage-safe eval, reproducible baseline ve run contract
 - [ ] M002: Probability Quality & Governance — Kalibrasyon davranışı, dağılım kayması odaklı governance/ablation ve karar kalitesi
 - [ ] M003: Submission-Ready Engine — E2E inference, submission operasyonu, release/readiness sertleşmesi

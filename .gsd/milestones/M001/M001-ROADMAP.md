@@ -67,7 +67,7 @@ This milestone is complete only when all are true:
 - [x] **S06: Artifact Contract + Reproducibility + Regression Gate** `risk:high` `depends:[S04,S05]`
   > After this: run metadata, reproducibility toleransı ve çoklu-kural regression pass/fail kararı üretilir.
 
-- [ ] **S07: Optional Submission Validation + Final Integration** `risk:medium` `depends:[S06]`
+- [x] **S07: Optional Submission Validation + Final Integration** `risk:medium` `depends:[S06]`
   > After this: Submission `ID,Pred` doğrulamasıyla birlikte tüm canonical hattın final entegrasyon kanıtı alınır.
 
 ## Boundary Map

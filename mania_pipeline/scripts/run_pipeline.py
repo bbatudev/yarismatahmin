@@ -22,6 +22,7 @@ from typing import Any, Callable
 SCRIPT_DIR = Path(__file__).resolve().parent
 PIPELINE_DIR = SCRIPT_DIR.parent
 REPO_ROOT = PIPELINE_DIR.parent
+KAGGLE_DATA_DIR = REPO_ROOT / "march-machine-leraning-mania-2026"
 DEFAULT_ARTIFACTS_ROOT = PIPELINE_DIR / "artifacts" / "runs"
 
 CANONICAL_STAGES = ("feature", "train", "eval_report", "artifact")
@@ -651,6 +652,82 @@ def _evaluate_regression_gate(
         report["reason"] = None
 
     return report
+
+
+def _validate_submission_frame(frame: pd.DataFrame) -> dict[str, Any]:
+    checks: dict[str, Any] = {}
+
+    checks["columns_exact"] = list(frame.columns) == ["ID", "Pred"]
+    checks["row_count"] = int(len(frame))
+    checks["id_non_null"] = bool(frame["ID"].notna().all()) if "ID" in frame.columns else False
+
+    pred_series = frame["Pred"] if "Pred" in frame.columns else pd.Series(dtype=float)
+    pred_numeric = pd.to_numeric(pred_series, errors="coerce") if len(pred_series) else pred_series
+
+    checks["pred_non_null"] = bool(pred_numeric.notna().all()) if len(pred_series) else False
+    checks["pred_in_range"] = bool(((pred_numeric >= 0.0) & (pred_numeric <= 1.0)).all()) if len(pred_series) else False
+
+    validation_pass = all(bool(value) for key, value in checks.items() if key != "row_count") and checks["row_count"] > 0
+
+    return {
+        "pass": bool(validation_pass),
+        "checks": checks,
+    }
+
+
+def _build_optional_submission(context: dict[str, Any]) -> dict[str, Any]:
+    submission_stage = str(context.get("submission_stage", "none")).lower()
+    run_dir = Path(context["run_dir"])
+
+    if submission_stage == "none":
+        payload = {
+            "status": "skipped",
+            "reason": "submission_not_requested",
+            "stage": "none",
+        }
+        report_path = run_dir / "submission_validation_report.json"
+        _write_json(report_path, payload)
+        payload["validation_report_json"] = str(report_path)
+        return payload
+
+    sample_name = "SampleSubmissionStage1.csv" if submission_stage == "stage1" else "SampleSubmissionStage2.csv"
+    sample_path = KAGGLE_DATA_DIR / sample_name
+    if not sample_path.exists():
+        raise RuntimeError(f"submission sample file not found: {sample_path}")
+
+    sample_df = pd.read_csv(sample_path)
+    if "ID" not in sample_df.columns:
+        raise RuntimeError(f"submission sample missing ID column: {sample_path}")
+
+    submission_df = pd.DataFrame(
+        {
+            "ID": sample_df["ID"].astype(str),
+            "Pred": np.full(len(sample_df), 0.5, dtype=float),
+        }
+    )
+
+    submission_path = run_dir / f"submission_{submission_stage}.csv"
+    submission_df.to_csv(submission_path, index=False)
+
+    validation = _validate_submission_frame(submission_df)
+    report_payload = {
+        "status": "passed" if validation["pass"] else "failed",
+        "reason": None if validation["pass"] else "submission_validation_failed",
+        "stage": submission_stage,
+        "sample_csv": str(sample_path),
+        "submission_csv": str(submission_path),
+        "row_count": int(len(submission_df)),
+        "validation": validation,
+    }
+
+    report_path = run_dir / "submission_validation_report.json"
+    _write_json(report_path, report_payload)
+
+    if not validation["pass"]:
+        raise RuntimeError("submission validation failed")
+
+    report_payload["validation_report_json"] = str(report_path)
+    return report_payload
 
 
 def _resolve_feature_path_for_gender(context: dict[str, Any], gender_key: str) -> Path:
@@ -1287,38 +1364,6 @@ def stage_artifact(context: dict[str, Any]) -> dict[str, Any]:
     regression_path = run_dir / "regression_gate_report.json"
     _write_json(regression_path, regression_payload)
 
-    run_files = sorted(
-        str(path.relative_to(run_dir))
-        for path in run_dir.glob("**/*")
-        if path.is_file() and path.name != "artifact_manifest.json"
-    )
-
-    manifest_payload = {
-        "run_id": context["run_id"],
-        "generated_at": _now_utc_iso(),
-        "run_dir": str(run_dir),
-        "file_count": len(run_files),
-        "files": run_files,
-        "stage_outputs": stage_outputs,
-        "contracts": {
-            "artifact_contract": {
-                "status": "passed" if artifact_contract_payload["pass"] else "failed",
-                "report_json": str(artifact_contract_path),
-            },
-            "reproducibility": {
-                "status": reproducibility_payload.get("status"),
-                "report_json": str(reproducibility_path),
-            },
-            "regression_gate": {
-                "status": regression_payload.get("status"),
-                "report_json": str(regression_path),
-            },
-        },
-    }
-
-    manifest_path = run_dir / "artifact_manifest.json"
-    _write_json(manifest_path, manifest_payload)
-
     if missing_artifacts:
         raise RuntimeError(
             "artifact contract failed: missing required artifacts -> " + ", ".join(sorted(missing_artifacts))
@@ -1336,9 +1381,46 @@ def stage_artifact(context: dict[str, Any]) -> dict[str, Any]:
             + json.dumps(regression_payload.get("blocking_failures", []), ensure_ascii=False)
         )
 
-    final_file_count = len(
-        [path for path in run_dir.glob("**/*") if path.is_file()]
+    submission_payload = _build_optional_submission(context)
+
+    run_files = sorted(
+        str(path.relative_to(run_dir))
+        for path in run_dir.glob("**/*")
+        if path.is_file() and path.name != "artifact_manifest.json"
     )
+
+    manifest_payload = {
+        "run_id": context["run_id"],
+        "generated_at": _now_utc_iso(),
+        "run_dir": str(run_dir),
+        "file_count": len(run_files),
+        "files": run_files,
+        "stage_outputs": stage_outputs,
+        "contracts": {
+            "artifact_contract": {
+                "status": "passed",
+                "report_json": str(artifact_contract_path),
+            },
+            "reproducibility": {
+                "status": reproducibility_payload.get("status"),
+                "report_json": str(reproducibility_path),
+            },
+            "regression_gate": {
+                "status": regression_payload.get("status"),
+                "report_json": str(regression_path),
+            },
+            "submission": {
+                "status": submission_payload.get("status"),
+                "report_json": submission_payload.get("validation_report_json"),
+                "submission_csv": submission_payload.get("submission_csv"),
+            },
+        },
+    }
+
+    manifest_path = run_dir / "artifact_manifest.json"
+    _write_json(manifest_path, manifest_payload)
+
+    final_file_count = len([path for path in run_dir.glob("**/*") if path.is_file()])
 
     return {
         "manifest": str(manifest_path),
@@ -1354,6 +1436,13 @@ def stage_artifact(context: dict[str, Any]) -> dict[str, Any]:
         "regression_gate": {
             "status": regression_payload.get("status"),
             "report_json": str(regression_path),
+        },
+        "submission": {
+            "status": submission_payload.get("status"),
+            "validation_report_json": submission_payload.get("validation_report_json"),
+            "submission_csv": submission_payload.get("submission_csv"),
+            "stage": submission_payload.get("stage"),
+            "reason": submission_payload.get("reason"),
         },
     }
 
@@ -1376,6 +1465,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=str(DEFAULT_ARTIFACTS_ROOT),
         help="Root directory where run-scoped artifacts are written",
     )
+    parser.add_argument(
+        "--submission-stage",
+        type=str,
+        choices=("none", "stage1", "stage2"),
+        default="none",
+        help="Optional submission output stage; 'none' disables submission generation",
+    )
     return parser.parse_args(argv)
 
 
@@ -1387,6 +1483,7 @@ def main(argv: list[str] | None = None) -> int:
         artifacts_root=args.artifacts_root,
         argv=argv,
     )
+    context["submission_stage"] = args.submission_stage
 
     run_dir = Path(context["run_dir"])
     run_dir.mkdir(parents=True, exist_ok=True)

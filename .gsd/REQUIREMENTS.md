@@ -12,17 +12,7 @@ Guidelines:
 
 ## Active
 
-
-### R012 — Optional submission generation and validation
-- Class: integration
-- Status: active
-- Description: İsteğe bağlı submission tek komutla üretilir ve `ID,Pred` format doğrulamasından geçer.
-- Why it matters: Araştırmadan yarışma teslimine geçişi güvenli hale getirir.
-- Source: user
-- Primary owning slice: M001/S07
-- Supporting slices: M003/S01 (provisional)
-- Validation: mapped
-- Notes: Submission üretimi varsayılan olarak opsiyonel kalır.
+- none
 
 ## Validated
 
@@ -158,6 +148,17 @@ Guidelines:
 - Validation: validated by execution
 - Notes: S06 ile `regression_gate_report.json` Brier mandatory + calibration degradation fail + AUC informational policy’sini enforce eder.
 
+### R012 — Optional submission generation and validation
+- Class: integration
+- Status: validated
+- Description: İsteğe bağlı submission tek komutla üretilir ve `ID,Pred` format doğrulamasından geçer.
+- Why it matters: Araştırmadan yarışma teslimine geçişi güvenli hale getirir.
+- Source: user
+- Primary owning slice: M001/S07
+- Supporting slices: M003/S01 (provisional)
+- Validation: validated by execution
+- Notes: S07’de `--submission-stage stage2` runtime proof’u ile `submission_stage2.csv` + strict validation report (`submission_validation_report.json`) kontratı doğrulandı.
+
 ### R019 — Single execution path enforcement
 - Class: constraint
 - Status: validated
@@ -243,7 +244,7 @@ Guidelines:
 | R009 | quality-attribute | validated | M001/S05 | M002/S01 | validated (S05 ablation delta contract tests + canonical smoke run artifact assertions) |
 | R010 | launchability | validated | M001/S06 | M001/S07 | validated (S06 artifact contract report + required-file fail-fast checks in runtime and tests) |
 | R011 | continuity | validated | M001/S06 | none | validated (S06 reproducibility report with same commit+seed tolerance pass/fail enforcement) |
-| R012 | integration | active | M001/S07 | M003/S01 | mapped |
+| R012 | integration | validated | M001/S07 | M003/S01 | validated (S07 submission stage runtime proof + strict `ID,Pred` validation report checks) |
 | R018 | failure-visibility | validated | M001/S06 | M002/S01 | validated (S06 regression gate report with blocking/non-blocking policy and runtime enforcement) |
 | R019 | constraint | validated | M001/S03 | M001/S07 | validated (S03 notebook authority guardrail test) |
 | R013 | quality-attribute | deferred | M002/S02 | none | unmapped |
@@ -254,7 +255,7 @@ Guidelines:
 
 ## Coverage Summary
 
-- Active requirements: 1
-- Mapped to slices: 1
-- Validated: 13
+- Active requirements: 0
+- Mapped to slices: 0
+- Validated: 14
 - Unmapped active requirements: 0
