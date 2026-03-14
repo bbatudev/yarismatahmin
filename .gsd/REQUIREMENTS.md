@@ -13,28 +13,6 @@ Guidelines:
 ## Active
 
 
-### R010 — Artifact contract
-- Class: launchability
-- Status: active
-- Description: Model dosyaları, kullanılan feature listesi, run metadata (git commit, komut, tarih, seed) zorunlu artifact seti olarak üretilir.
-- Why it matters: Run tekrar üretimi ve audit mümkün olur.
-- Source: user
-- Primary owning slice: M001/S06
-- Supporting slices: M001/S07
-- Validation: mapped
-- Notes: Artifact yolu sabit ve script tarafından yönetilir.
-
-### R011 — Reproducibility tolerance gate
-- Class: continuity
-- Status: active
-- Description: Aynı commit + aynı seed koşusunda metrik farkı tolerans içinde kalmalıdır (örn. |ΔBrier| <= 1e-4).
-- Why it matters: “Aynı kod farklı sonuç” problemini operasyonel olarak kilitler.
-- Source: user
-- Primary owning slice: M001/S06
-- Supporting slices: none
-- Validation: mapped
-- Notes: Tolerans breach olursa run fail.
-
 ### R012 — Optional submission generation and validation
 - Class: integration
 - Status: active
@@ -45,17 +23,6 @@ Guidelines:
 - Supporting slices: M003/S01 (provisional)
 - Validation: mapped
 - Notes: Submission üretimi varsayılan olarak opsiyonel kalır.
-
-### R018 — Run regression gate
-- Class: failure-visibility
-- Status: active
-- Description: Her run önceki canonical run’a karşı delta raporu üretir ve pass/fail kararı verir.
-- Why it matters: Sessiz kalite düşüşlerini engeller.
-- Source: user
-- Primary owning slice: M001/S06
-- Supporting slices: M002/S01 (provisional)
-- Validation: mapped
-- Notes: Çoklu kural: Brier zorunlu, calibration kötüleşmesi fail, AUC bilgi amaçlı.
 
 ## Validated
 
@@ -158,6 +125,39 @@ Guidelines:
 - Validation: validated by execution
 - Notes: S05 canonical run’da `ablation_report.json`, `executed_group_count` ve reason-coded `skipped_groups` contract yüzeyleri runtime assertion’larla doğrulandı.
 
+### R010 — Artifact contract
+- Class: launchability
+- Status: validated
+- Description: Model dosyaları, kullanılan feature listesi, run metadata (git commit, komut, tarih, seed) zorunlu artifact seti olarak üretilir.
+- Why it matters: Run tekrar üretimi ve audit mümkün olur.
+- Source: user
+- Primary owning slice: M001/S06
+- Supporting slices: M001/S07
+- Validation: validated by execution
+- Notes: S06 ile `artifact_contract_report.json` required artifact var/yok kontratını üretip eksik durumda fail-fast enforce ediyor.
+
+### R011 — Reproducibility tolerance gate
+- Class: continuity
+- Status: validated
+- Description: Aynı commit + aynı seed koşusunda metrik farkı tolerans içinde kalmalıdır (örn. |ΔBrier| <= 1e-4).
+- Why it matters: “Aynı kod farklı sonuç” problemini operasyonel olarak kilitler.
+- Source: user
+- Primary owning slice: M001/S06
+- Supporting slices: none
+- Validation: validated by execution
+- Notes: S06 run’larında `reproducibility_report.json` same commit+seed baseline ile pass/skip/fail üretir; breach stage fail olur.
+
+### R018 — Run regression gate
+- Class: failure-visibility
+- Status: validated
+- Description: Her run önceki canonical run’a karşı delta raporu üretir ve pass/fail kararı verir.
+- Why it matters: Sessiz kalite düşüşlerini engeller.
+- Source: user
+- Primary owning slice: M001/S06
+- Supporting slices: M002/S01 (provisional)
+- Validation: validated by execution
+- Notes: S06 ile `regression_gate_report.json` Brier mandatory + calibration degradation fail + AUC informational policy’sini enforce eder.
+
 ### R019 — Single execution path enforcement
 - Class: constraint
 - Status: validated
@@ -241,10 +241,10 @@ Guidelines:
 | R007 | quality-attribute | validated | M001/S04 | M001/S06 | validated (S04 calibration contract tests + canonical smoke run artifacts and eval wiring checks) |
 | R008 | operability | validated | M001/S05 | M001/S06 | validated (S05 governance ledger contract test + canonical smoke run metadata/eval wiring checks) |
 | R009 | quality-attribute | validated | M001/S05 | M002/S01 | validated (S05 ablation delta contract tests + canonical smoke run artifact assertions) |
-| R010 | launchability | active | M001/S06 | M001/S07 | mapped |
-| R011 | continuity | active | M001/S06 | none | mapped |
+| R010 | launchability | validated | M001/S06 | M001/S07 | validated (S06 artifact contract report + required-file fail-fast checks in runtime and tests) |
+| R011 | continuity | validated | M001/S06 | none | validated (S06 reproducibility report with same commit+seed tolerance pass/fail enforcement) |
 | R012 | integration | active | M001/S07 | M003/S01 | mapped |
-| R018 | failure-visibility | active | M001/S06 | M002/S01 | mapped |
+| R018 | failure-visibility | validated | M001/S06 | M002/S01 | validated (S06 regression gate report with blocking/non-blocking policy and runtime enforcement) |
 | R019 | constraint | validated | M001/S03 | M001/S07 | validated (S03 notebook authority guardrail test) |
 | R013 | quality-attribute | deferred | M002/S02 | none | unmapped |
 | R014 | differentiator | deferred | M002/S01 | M002/S03 | unmapped |
@@ -254,7 +254,7 @@ Guidelines:
 
 ## Coverage Summary
 
-- Active requirements: 4
-- Mapped to slices: 4
-- Validated: 10
+- Active requirements: 1
+- Mapped to slices: 1
+- Validated: 13
 - Unmapped active requirements: 0

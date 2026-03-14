@@ -64,7 +64,7 @@ This milestone is complete only when all are true:
 - [x] **S05: Feature Governance + Controlled Ablation** `risk:medium` `depends:[S03]`
   > After this: keep/drop/candidate + `default_action` ve ablation delta raporu otomatik oluşur.
 
-- [ ] **S06: Artifact Contract + Reproducibility + Regression Gate** `risk:high` `depends:[S04,S05]`
+- [x] **S06: Artifact Contract + Reproducibility + Regression Gate** `risk:high` `depends:[S04,S05]`
   > After this: run metadata, reproducibility toleransı ve çoklu-kural regression pass/fail kararı üretilir.
 
 - [ ] **S07: Optional Submission Validation + Final Integration** `risk:medium` `depends:[S06]`

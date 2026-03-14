@@ -38,6 +38,8 @@ CALIBRATION_BINS_COLUMNS = (
     "gap",
 )
 HIGH_PROB_THRESHOLD = 0.8
+REPRO_BRIER_TOLERANCE = 1e-4
+REGRESSION_NUMERIC_EPS = 1e-9
 
 
 def _now_utc_iso() -> str:
@@ -96,6 +98,17 @@ def _load_script_module(filename: str, module_name: str):
     return module
 
 
+def _load_script_module_direct(filename: str, module_name: str):
+    """Load by path without going through monkeypatch-prone indirection."""
+    module_path = SCRIPT_DIR / filename
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    if not spec or not spec.loader:
+        raise RuntimeError(f"Could not load script module: {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 @lru_cache(maxsize=1)
 def _load_split_leakage_contracts_module():
     return _load_script_module("split_leakage_contracts.py", "split_leakage_contracts_stage")
@@ -103,7 +116,9 @@ def _load_split_leakage_contracts_module():
 
 @lru_cache(maxsize=1)
 def _load_feature_governance_module():
-    return _load_script_module("feature_governance.py", "feature_governance_stage")
+    # Intentionally bypasses _load_script_module so tests that monkeypatch
+    # train-module loading do not accidentally stub governance contracts.
+    return _load_script_module_direct("feature_governance.py", "feature_governance_stage")
 
 
 def validate_split_contract(df):
@@ -392,6 +407,250 @@ def _safe_delta(left: Any, right: Any) -> float | None:
     if isinstance(left, (int, float)) and isinstance(right, (int, float)):
         return float(left - right)
     return None
+
+
+def _as_float_or_none(value: Any) -> float | None:
+    if isinstance(value, (int, float)):
+        numeric = float(value)
+        if np.isfinite(numeric):
+            return numeric
+    return None
+
+
+def _extract_run_snapshot(stage_outputs: dict[str, Any]) -> dict[str, Any]:
+    snapshot = {
+        "metrics": {"men": {}, "women": {}},
+        "calibration": {"men": {}, "women": {}},
+    }
+
+    train_metrics = stage_outputs.get("train", {}).get("metrics_by_split", {}) if isinstance(stage_outputs, dict) else {}
+    calibration_summary = (
+        stage_outputs.get("eval_report", {}).get("calibration", {}).get("calibration_summary", {})
+        if isinstance(stage_outputs, dict)
+        else {}
+    )
+
+    for gender_key in ("men", "women"):
+        split_metrics = train_metrics.get(gender_key, {}).get("Test", {}) if isinstance(train_metrics, dict) else {}
+        snapshot["metrics"][gender_key] = {
+            "brier": _as_float_or_none(split_metrics.get("brier")) if isinstance(split_metrics, dict) else None,
+            "logloss": _as_float_or_none(split_metrics.get("logloss")) if isinstance(split_metrics, dict) else None,
+            "auc": _as_float_or_none(split_metrics.get("auc")) if isinstance(split_metrics, dict) else None,
+        }
+
+        split_calibration = (
+            calibration_summary.get(gender_key, {}).get("Test", {}) if isinstance(calibration_summary, dict) else {}
+        )
+        high_prob = split_calibration.get("high_prob_band", {}) if isinstance(split_calibration, dict) else {}
+
+        snapshot["calibration"][gender_key] = {
+            "ece": _as_float_or_none(split_calibration.get("ece")) if isinstance(split_calibration, dict) else None,
+            "wmae": _as_float_or_none(split_calibration.get("wmae")) if isinstance(split_calibration, dict) else None,
+            "reason": split_calibration.get("reason") if isinstance(split_calibration, dict) else None,
+            "high_prob_gap": _as_float_or_none(high_prob.get("gap")) if isinstance(high_prob, dict) else None,
+            "high_prob_reason": high_prob.get("reason") if isinstance(high_prob, dict) else None,
+        }
+
+    return snapshot
+
+
+def _load_prior_run_metadatas(*, artifacts_root: Path, current_run_id: str) -> list[dict[str, Any]]:
+    if not artifacts_root.exists():
+        return []
+
+    run_metadata_entries: list[dict[str, Any]] = []
+    for run_dir in sorted([path for path in artifacts_root.iterdir() if path.is_dir()]):
+        metadata_path = run_dir / "run_metadata.json"
+        if not metadata_path.exists():
+            continue
+
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+
+        run_id = metadata.get("run_id")
+        status = metadata.get("status")
+        if not isinstance(run_id, str) or run_id == current_run_id:
+            continue
+        if status != "succeeded":
+            continue
+
+        run_metadata_entries.append(metadata)
+
+    run_metadata_entries.sort(key=lambda item: str(item.get("run_id", "")))
+    return run_metadata_entries
+
+
+def _evaluate_reproducibility(
+    *,
+    current_run_context: dict[str, Any],
+    current_snapshot: dict[str, Any],
+    baseline_metadata: dict[str, Any] | None,
+    tolerance: float = REPRO_BRIER_TOLERANCE,
+) -> dict[str, Any]:
+    report: dict[str, Any] = {
+        "status": "skipped",
+        "reason": "no_baseline_same_commit_seed",
+        "tolerance": float(tolerance),
+        "by_gender": {},
+        "current_run_id": current_run_context.get("run_id"),
+        "baseline_run_id": None,
+    }
+
+    if baseline_metadata is None:
+        return report
+
+    baseline_snapshot = _extract_run_snapshot(baseline_metadata.get("stage_outputs", {}))
+    report["baseline_run_id"] = baseline_metadata.get("run_id")
+    report["baseline_git_commit"] = baseline_metadata.get("git_commit")
+    report["baseline_seed"] = baseline_metadata.get("seed")
+
+    failures: list[str] = []
+    for gender_key in ("men", "women"):
+        current_brier = current_snapshot.get("metrics", {}).get(gender_key, {}).get("brier")
+        baseline_brier = baseline_snapshot.get("metrics", {}).get(gender_key, {}).get("brier")
+        delta_brier = _safe_delta(current_brier, baseline_brier)
+        abs_delta = abs(delta_brier) if delta_brier is not None else None
+        within_tolerance = abs_delta is not None and abs_delta <= tolerance
+
+        report["by_gender"][gender_key] = {
+            "current_test_brier": current_brier,
+            "baseline_test_brier": baseline_brier,
+            "delta_brier": delta_brier,
+            "abs_delta_brier": abs_delta,
+            "within_tolerance": bool(within_tolerance),
+        }
+
+        if delta_brier is None:
+            failures.append(f"{gender_key}:missing_test_brier")
+        elif not within_tolerance:
+            failures.append(f"{gender_key}:delta_exceeds_tolerance")
+
+    if failures:
+        report["status"] = "failed"
+        report["reason"] = "reproducibility_tolerance_breach"
+        report["failures"] = failures
+    else:
+        report["status"] = "passed"
+        report["reason"] = None
+
+    return report
+
+
+def _evaluate_regression_gate(
+    *,
+    current_snapshot: dict[str, Any],
+    baseline_metadata: dict[str, Any] | None,
+) -> dict[str, Any]:
+    report: dict[str, Any] = {
+        "status": "skipped",
+        "reason": "no_baseline_run",
+        "policy": {
+            "brier": "mandatory_non_degradation",
+            "calibration": "degradation_fails",
+            "auc": "informational",
+        },
+        "by_gender": {},
+        "baseline_run_id": None,
+    }
+
+    if baseline_metadata is None:
+        return report
+
+    baseline_snapshot = _extract_run_snapshot(baseline_metadata.get("stage_outputs", {}))
+    report["baseline_run_id"] = baseline_metadata.get("run_id")
+
+    blocking_failures: list[str] = []
+
+    for gender_key in ("men", "women"):
+        current_metrics = current_snapshot.get("metrics", {}).get(gender_key, {})
+        baseline_metrics = baseline_snapshot.get("metrics", {}).get(gender_key, {})
+        current_cal = current_snapshot.get("calibration", {}).get(gender_key, {})
+        baseline_cal = baseline_snapshot.get("calibration", {}).get(gender_key, {})
+
+        brier_delta = _safe_delta(current_metrics.get("brier"), baseline_metrics.get("brier"))
+        if brier_delta is None:
+            brier_rule = {
+                "status": "failed",
+                "reason": "missing_brier_metric",
+                "current_test_brier": current_metrics.get("brier"),
+                "baseline_test_brier": baseline_metrics.get("brier"),
+                "delta_test_brier": None,
+            }
+            blocking_failures.append(f"{gender_key}:missing_brier_metric")
+        elif brier_delta > REGRESSION_NUMERIC_EPS:
+            brier_rule = {
+                "status": "failed",
+                "reason": "brier_degraded",
+                "current_test_brier": current_metrics.get("brier"),
+                "baseline_test_brier": baseline_metrics.get("brier"),
+                "delta_test_brier": brier_delta,
+            }
+            blocking_failures.append(f"{gender_key}:brier_degraded")
+        else:
+            brier_rule = {
+                "status": "passed",
+                "reason": None,
+                "current_test_brier": current_metrics.get("brier"),
+                "baseline_test_brier": baseline_metrics.get("brier"),
+                "delta_test_brier": brier_delta,
+            }
+
+        calibration_reasons: list[str] = []
+        ece_delta = _safe_delta(current_cal.get("ece"), baseline_cal.get("ece"))
+        wmae_delta = _safe_delta(current_cal.get("wmae"), baseline_cal.get("wmae"))
+
+        baseline_gap = baseline_cal.get("high_prob_gap")
+        current_gap = current_cal.get("high_prob_gap")
+        high_prob_gap_delta = _safe_delta(current_gap, baseline_gap)
+        abs_gap_delta = None
+        if isinstance(current_gap, (int, float)) and isinstance(baseline_gap, (int, float)):
+            abs_gap_delta = float(abs(current_gap) - abs(baseline_gap))
+
+        if ece_delta is not None and ece_delta > REGRESSION_NUMERIC_EPS:
+            calibration_reasons.append("ece_degraded")
+        if wmae_delta is not None and wmae_delta > REGRESSION_NUMERIC_EPS:
+            calibration_reasons.append("wmae_degraded")
+        if abs_gap_delta is not None and abs_gap_delta > REGRESSION_NUMERIC_EPS:
+            calibration_reasons.append("high_prob_gap_degraded")
+
+        if calibration_reasons:
+            blocking_failures.append(f"{gender_key}:calibration_degraded")
+            calibration_rule_status = "failed"
+            calibration_rule_reason = ",".join(calibration_reasons)
+        else:
+            calibration_rule_status = "passed"
+            calibration_rule_reason = None
+
+        report["by_gender"][gender_key] = {
+            "brier_rule": brier_rule,
+            "calibration_rule": {
+                "status": calibration_rule_status,
+                "reason": calibration_rule_reason,
+                "delta_ece": ece_delta,
+                "delta_wmae": wmae_delta,
+                "delta_high_prob_gap": high_prob_gap_delta,
+                "delta_high_prob_gap_abs": abs_gap_delta,
+                "baseline_high_prob_reason": baseline_cal.get("high_prob_reason"),
+                "current_high_prob_reason": current_cal.get("high_prob_reason"),
+            },
+            "auc_info": {
+                "current_test_auc": current_metrics.get("auc"),
+                "baseline_test_auc": baseline_metrics.get("auc"),
+                "delta_test_auc": _safe_delta(current_metrics.get("auc"), baseline_metrics.get("auc")),
+            },
+        }
+
+    if blocking_failures:
+        report["status"] = "failed"
+        report["reason"] = "regression_gate_failed"
+        report["blocking_failures"] = blocking_failures
+    else:
+        report["status"] = "passed"
+        report["reason"] = None
+
+    return report
 
 
 def _resolve_feature_path_for_gender(context: dict[str, Any], gender_key: str) -> Path:
@@ -942,27 +1201,160 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
 
 def stage_artifact(context: dict[str, Any]) -> dict[str, Any]:
     run_dir = Path(context["run_dir"])
+    stage_outputs = context.get("stage_outputs", {}) if isinstance(context.get("stage_outputs", {}), dict) else {}
+    feature_output = stage_outputs.get("feature", {}) if isinstance(stage_outputs.get("feature", {}), dict) else {}
+    train_output = stage_outputs.get("train", {}) if isinstance(stage_outputs.get("train", {}), dict) else {}
+    eval_output = stage_outputs.get("eval_report", {}) if isinstance(stage_outputs.get("eval_report", {}), dict) else {}
+    calibration_output = eval_output.get("calibration", {}) if isinstance(eval_output.get("calibration", {}), dict) else {}
+    governance_output = eval_output.get("governance", {}) if isinstance(eval_output.get("governance", {}), dict) else {}
+    governance_artifacts = (
+        governance_output.get("artifacts", {}) if isinstance(governance_output.get("artifacts", {}), dict) else {}
+    )
+    train_genders = train_output.get("genders", {}) if isinstance(train_output.get("genders", {}), dict) else {}
+
+    artifact_paths = {
+        "run_metadata_json": context.get("metadata_path"),
+        "stage_events_jsonl": context.get("stage_events_path"),
+        "eval_report_json": eval_output.get("eval_report"),
+        "calibration_bins_csv": calibration_output.get("bins_csv"),
+        "calibration_report_json": calibration_output.get("report_json"),
+        "governance_ledger_csv": governance_artifacts.get("ledger_csv"),
+        "ablation_report_json": governance_artifacts.get("ablation_report_json"),
+        "men_model_pkl": train_genders.get("men", {}).get("model_path") if isinstance(train_genders.get("men", {}), dict) else None,
+        "women_model_pkl": train_genders.get("women", {}).get("model_path") if isinstance(train_genders.get("women", {}), dict) else None,
+        "men_features_csv": feature_output.get("outputs", {}).get("men_features") if isinstance(feature_output.get("outputs", {}), dict) else None,
+        "women_features_csv": feature_output.get("outputs", {}).get("women_features") if isinstance(feature_output.get("outputs", {}), dict) else None,
+    }
+
+    contract_entries: dict[str, dict[str, Any]] = {}
+    missing_artifacts: list[str] = []
+    for name, raw_path in artifact_paths.items():
+        if isinstance(raw_path, str) and raw_path.strip():
+            resolved_path = Path(raw_path)
+            exists = resolved_path.exists()
+            path_value = str(resolved_path)
+        else:
+            resolved_path = None
+            exists = False
+            path_value = None
+
+        contract_entries[name] = {
+            "path": path_value,
+            "exists": bool(exists),
+        }
+        if not exists:
+            missing_artifacts.append(name)
+
+    artifact_contract_payload = {
+        "run_id": context["run_id"],
+        "generated_at": _now_utc_iso(),
+        "required_artifacts": contract_entries,
+        "missing_artifacts": missing_artifacts,
+        "pass": len(missing_artifacts) == 0,
+    }
+    artifact_contract_path = run_dir / "artifact_contract_report.json"
+    _write_json(artifact_contract_path, artifact_contract_payload)
+
+    prior_runs = _load_prior_run_metadatas(
+        artifacts_root=Path(context["artifacts_root"]),
+        current_run_id=context["run_id"],
+    )
+
+    current_snapshot = _extract_run_snapshot(stage_outputs)
+
+    reproducibility_baseline = next(
+        (
+            metadata
+            for metadata in reversed(prior_runs)
+            if metadata.get("git_commit") == context.get("git_commit") and metadata.get("seed") == context.get("seed")
+        ),
+        None,
+    )
+    reproducibility_payload = _evaluate_reproducibility(
+        current_run_context=context,
+        current_snapshot=current_snapshot,
+        baseline_metadata=reproducibility_baseline,
+        tolerance=REPRO_BRIER_TOLERANCE,
+    )
+    reproducibility_path = run_dir / "reproducibility_report.json"
+    _write_json(reproducibility_path, reproducibility_payload)
+
+    regression_baseline = prior_runs[-1] if prior_runs else None
+    regression_payload = _evaluate_regression_gate(
+        current_snapshot=current_snapshot,
+        baseline_metadata=regression_baseline,
+    )
+    regression_path = run_dir / "regression_gate_report.json"
+    _write_json(regression_path, regression_payload)
+
     run_files = sorted(
         str(path.relative_to(run_dir))
         for path in run_dir.glob("**/*")
-        if path.is_file()
+        if path.is_file() and path.name != "artifact_manifest.json"
     )
 
-    payload = {
+    manifest_payload = {
         "run_id": context["run_id"],
         "generated_at": _now_utc_iso(),
         "run_dir": str(run_dir),
         "file_count": len(run_files),
         "files": run_files,
-        "stage_outputs": context.get("stage_outputs", {}),
+        "stage_outputs": stage_outputs,
+        "contracts": {
+            "artifact_contract": {
+                "status": "passed" if artifact_contract_payload["pass"] else "failed",
+                "report_json": str(artifact_contract_path),
+            },
+            "reproducibility": {
+                "status": reproducibility_payload.get("status"),
+                "report_json": str(reproducibility_path),
+            },
+            "regression_gate": {
+                "status": regression_payload.get("status"),
+                "report_json": str(regression_path),
+            },
+        },
     }
 
     manifest_path = run_dir / "artifact_manifest.json"
-    _write_json(manifest_path, payload)
+    _write_json(manifest_path, manifest_payload)
+
+    if missing_artifacts:
+        raise RuntimeError(
+            "artifact contract failed: missing required artifacts -> " + ", ".join(sorted(missing_artifacts))
+        )
+
+    if reproducibility_payload.get("status") == "failed":
+        raise RuntimeError(
+            "reproducibility gate failed: "
+            + json.dumps(reproducibility_payload.get("failures", []), ensure_ascii=False)
+        )
+
+    if regression_payload.get("status") == "failed":
+        raise RuntimeError(
+            "regression gate failed: "
+            + json.dumps(regression_payload.get("blocking_failures", []), ensure_ascii=False)
+        )
+
+    final_file_count = len(
+        [path for path in run_dir.glob("**/*") if path.is_file()]
+    )
 
     return {
         "manifest": str(manifest_path),
-        "file_count": len(run_files) + 1,
+        "file_count": final_file_count,
+        "artifact_contract": {
+            "status": "passed",
+            "report_json": str(artifact_contract_path),
+        },
+        "reproducibility": {
+            "status": reproducibility_payload.get("status"),
+            "report_json": str(reproducibility_path),
+        },
+        "regression_gate": {
+            "status": regression_payload.get("status"),
+            "report_json": str(regression_path),
+        },
     }
 
 
