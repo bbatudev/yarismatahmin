@@ -66,7 +66,10 @@ def _build_context(tmp_path: Path, run_id: str, submission_stage: str = "none") 
             }
         },
     )
+    drift_report = _write_json(run_dir / "drift_regime_report.json", {"ok": True})
+    calibration_policy_report = _write_json(run_dir / "calibration_policy_report.json", {"ok": True})
     governance_ledger = _write_text(run_dir / "governance_ledger.csv", "feature,group\n")
+    governance_decision_report = _write_json(run_dir / "governance_decision_report.json", {"ok": True})
     ablation_report = _write_json(run_dir / "ablation_report.json", {"ok": True})
 
     return {
@@ -119,11 +122,36 @@ def _build_context(tmp_path: Path, run_id: str, submission_stage: str = "none") 
                         },
                     },
                 },
+                "drift": {
+                    "report_json": str(drift_report),
+                    "by_gender": {
+                        "men": {"splits": {}, "regimes": {}},
+                        "women": {"splits": {}, "regimes": {}},
+                    },
+                    "alerts": [],
+                },
+                "calibration_policy": {
+                    "report_json": str(calibration_policy_report),
+                    "policy_name": "regime_aware_calibration_v1",
+                    "config": {},
+                    "by_gender": {
+                        "men": {"selected_method": "none", "candidate_methods": {}},
+                        "women": {"selected_method": "none", "candidate_methods": {}},
+                    },
+                },
                 "governance": {
                     "artifacts": {
                         "ledger_csv": str(governance_ledger),
                         "ablation_report_json": str(ablation_report),
                     }
+                },
+                "governance_decision": {
+                    "report_json": str(governance_decision_report),
+                    "by_gender": {
+                        "men": {"decision": "hold_baseline", "confidence": 0.5, "reason_codes": []},
+                        "women": {"decision": "hold_baseline", "confidence": 0.5, "reason_codes": []},
+                    },
+                    "aggregate": {"decision": "hold_baseline", "reason_codes": []},
                 },
             },
         },
