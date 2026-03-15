@@ -21,6 +21,26 @@ Kaggle March Machine Learning Mania 2026 için geliştirilen, **canonical** ve d
 
 Bu yüzden model promote edilmedi; sadece güvenilirlik/karar mekanizması iyileştirmeleri tutuldu.
 
+### Season-by-season backtest (2018–2025, quality_v1)
+
+| Season | Men Test Brier | Women Test Brier |
+|---|---:|---:|
+| 2018 | 0.20995 | 0.16350 |
+| 2019 | 0.18064 | 0.13377 |
+| 2021 | skipped | skipped |
+| 2022 | 0.22894 | 0.18414 |
+| 2023 | 0.20961 | 0.17721 |
+| 2024 | 0.20629 | 0.13818 |
+| 2025 | 0.15861 | 0.13936 |
+
+- Men mean test brier: `0.19901`
+- Women mean test brier: `0.15603`
+- 2021 skip nedeni: `val_rows_empty`
+
+Raporlar:
+- `mania_pipeline/artifacts/reports/season_backtest_20260315T004012Z.json`
+- `mania_pipeline/artifacts/reports/season_backtest_20260315T004012Z.csv`
+
 ---
 
 ## 📁 Proje Yapısı
@@ -32,7 +52,8 @@ ML_March_Mania2026_NCAA/
 │   │   ├── run_pipeline.py
 │   │   ├── 02_feature_engineering.py
 │   │   ├── 03_lgbm_train.py
-│   │   └── compare_run_metrics.py
+│   │   ├── compare_run_metrics.py
+│   │   └── season_by_season_backtest.py
 │   ├── tests/
 │   └── artifacts/
 └── .gsd/
@@ -97,6 +118,15 @@ python mania_pipeline/scripts/compare_run_metrics.py \
   --baseline-run mania_pipeline/artifacts/runs_m003/s04_gate/20260314T233640Z_m003_s04_readiness_gate \
   --candidate-run mania_pipeline/artifacts/runs_m004/20260315T001052Z_m004_s04_final_freeze \
   --output-json .gsd/milestones/M004/S04-FINAL-COMPARISON.json
+```
+
+### Season-by-season backtest (Men + Women)
+```bash
+python mania_pipeline/scripts/season_by_season_backtest.py \
+  --profile quality_v1 \
+  --start-season 2018 \
+  --end-season 2025 \
+  --quiet-train
 ```
 
 ---

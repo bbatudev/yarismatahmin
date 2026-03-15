@@ -1,0 +1,251 @@
+{
+  "generated_at": "2026-03-15T00:40:14.896873Z",
+  "config": {
+    "men_path": "C:\\Users\\Gaming\\Desktop\\projects\\yarismatahmin\\mania_pipeline\\artifacts\\data\\processed_features_men.csv",
+    "women_path": "C:\\Users\\Gaming\\Desktop\\projects\\yarismatahmin\\mania_pipeline\\artifacts\\data\\processed_features_women.csv",
+    "profile": "quality_v1",
+    "seed": 42,
+    "start_season": 2018,
+    "end_season": 2025
+  },
+  "by_gender": {
+    "men": {
+      "rows": [
+        {
+          "season": 2018,
+          "status": "passed",
+          "reason": null,
+          "row_counts": {
+            "train": 1828,
+            "val": 134,
+            "test": 134
+          },
+          "metrics": {
+            "val_brier": 0.20048705124822766,
+            "test_brier": 0.20995359969872374,
+            "test_logloss": 0.6104874393786501,
+            "test_auc": 0.7288928491869013
+          }
+        },
+        {
+          "season": 2019,
+          "status": "passed",
+          "reason": null,
+          "row_counts": {
+            "train": 1962,
+            "val": 134,
+            "test": 134
+          },
+          "metrics": {
+            "val_brier": 0.2117666887829008,
+            "test_brier": 0.18064126282527015,
+            "test_logloss": 0.541454361793896,
+            "test_auc": 0.8202272220984629
+          }
+        },
+        {
+          "season": 2021,
+          "status": "skipped",
+          "reason": "val_rows_empty"
+        },
+        {
+          "season": 2022,
+          "status": "passed",
+          "reason": null,
+          "row_counts": {
+            "train": 2230,
+            "val": 132,
+            "test": 134
+          },
+          "metrics": {
+            "val_brier": 0.21096624740154193,
+            "test_brier": 0.2289388547958133,
+            "test_logloss": 0.6482205632483926,
+            "test_auc": 0.6789930942303408
+          }
+        },
+        {
+          "season": 2023,
+          "status": "passed",
+          "reason": null,
+          "row_counts": {
+            "train": 2362,
+            "val": 134,
+            "test": 134
+          },
+          "metrics": {
+            "val_brier": 0.2105695707520369,
+            "test_brier": 0.20961300801027685,
+            "test_logloss": 0.6075615168095727,
+            "test_auc": 0.7320115838716864
+          }
+        },
+        {
+          "season": 2024,
+          "status": "passed",
+          "reason": null,
+          "row_counts": {
+            "train": 2496,
+            "val": 134,
+            "test": 134
+          },
+          "metrics": {
+            "val_brier": 0.20387851132751766,
+            "test_brier": 0.20628991642425665,
+            "test_logloss": 0.5963152772759837,
+            "test_auc": 0.742704388505235
+          }
+        },
+        {
+          "season": 2025,
+          "status": "passed",
+          "reason": null,
+          "row_counts": {
+            "train": 2630,
+            "val": 134,
+            "test": 134
+          },
+          "metrics": {
+            "val_brier": 0.19982406266268044,
+            "test_brier": 0.1586106478195743,
+            "test_logloss": 0.4869538567756196,
+            "test_auc": 0.8627756738694586
+          }
+        }
+      ],
+      "summary": {
+        "season_count": 7,
+        "passed_count": 6,
+        "mean_test_brier": 0.1990078815956525,
+        "median_test_brier": 0.20795146221726674,
+        "best_season": {
+          "season": 2025,
+          "test_brier": 0.1586106478195743
+        },
+        "worst_season": {
+          "season": 2022,
+          "test_brier": 0.2289388547958133
+        }
+      }
+    },
+    "women": {
+      "rows": [
+        {
+          "season": 2018,
+          "status": "passed",
+          "reason": null,
+          "row_counts": {
+            "train": 882,
+            "val": 126,
+            "test": 126
+          },
+          "metrics": {
+            "val_brier": 0.17609248144779396,
+            "test_brier": 0.16349995727665595,
+            "test_logloss": 0.4915358039787295,
+            "test_auc": 0.8463088939279415
+          }
+        },
+        {
+          "season": 2019,
+          "status": "passed",
+          "reason": null,
+          "row_counts": {
+            "train": 1008,
+            "val": 126,
+            "test": 126
+          },
+          "metrics": {
+            "val_brier": 0.1535532319933999,
+            "test_brier": 0.13377269065235312,
+            "test_logloss": 0.4124077117423289,
+            "test_auc": 0.8914084152179391
+          }
+        },
+        {
+          "season": 2021,
+          "status": "skipped",
+          "reason": "val_rows_empty"
+        },
+        {
+          "season": 2022,
+          "status": "passed",
+          "reason": null,
+          "row_counts": {
+            "train": 1260,
+            "val": 126,
+            "test": 134
+          },
+          "metrics": {
+            "val_brier": 0.17080260475996248,
+            "test_brier": 0.1841424216888658,
+            "test_logloss": 0.5438471582055416,
+            "test_auc": 0.7966139451993762
+          }
+        },
+        {
+          "season": 2023,
+          "status": "passed",
+          "reason": null,
+          "row_counts": {
+            "train": 1386,
+            "val": 134,
+            "test": 134
+          },
+          "metrics": {
+            "val_brier": 0.18546606660845305,
+            "test_brier": 0.17721032984595972,
+            "test_logloss": 0.5252537880920547,
+            "test_auc": 0.8151035865448876
+          }
+        },
+        {
+          "season": 2024,
+          "status": "passed",
+          "reason": null,
+          "row_counts": {
+            "train": 1520,
+            "val": 134,
+            "test": 134
+          },
+          "metrics": {
+            "val_brier": 0.18208754494163673,
+            "test_brier": 0.13817680620381065,
+            "test_logloss": 0.4356911771436027,
+            "test_auc": 0.8993094230340833
+          }
+        },
+        {
+          "season": 2025,
+          "status": "passed",
+          "reason": null,
+          "row_counts": {
+            "train": 1654,
+            "val": 134,
+            "test": 134
+          },
+          "metrics": {
+            "val_brier": 0.1262333832709463,
+            "test_brier": 0.1393620133857836,
+            "test_logloss": 0.42229471552252146,
+            "test_auc": 0.8834929828469592
+          }
+        }
+      ],
+      "summary": {
+        "season_count": 7,
+        "passed_count": 6,
+        "mean_test_brier": 0.15602736984223814,
+        "median_test_brier": 0.1514309853312198,
+        "best_season": {
+          "season": 2019,
+          "test_brier": 0.13377269065235312
+        },
+        "worst_season": {
+          "season": 2022,
+          "test_brier": 0.1841424216888658
+        }
+      }
+    }
+  }
+}
