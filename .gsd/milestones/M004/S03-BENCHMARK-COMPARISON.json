@@ -1,0 +1,50 @@
+{
+  "baseline_run_id": "20260314T233640Z_m003_s04_readiness_gate",
+  "candidate_run_id": "20260315T000814Z_m004_s03_ensemble_smoke",
+  "by_gender": {
+    "men": {
+      "baseline": {
+        "brier": 0.18175050076078456,
+        "logloss": 0.5381222738302219,
+        "auc": 0.8022388059701493
+      },
+      "candidate": {
+        "brier": 0.18331994684298658,
+        "logloss": 0.5465748591316361,
+        "auc": 0.8032412564045445
+      },
+      "delta": {
+        "brier": 0.001569446082202025,
+        "logloss": 0.008452585301414128,
+        "auc": 0.0010024504343951746
+      }
+    },
+    "women": {
+      "baseline": {
+        "brier": 0.14223205049047852,
+        "logloss": 0.44633879320997155,
+        "auc": 0.8927378035197148
+      },
+      "candidate": {
+        "brier": 0.14214695117980963,
+        "logloss": 0.44394557201853324,
+        "auc": 0.8892849186901315
+      },
+      "delta": {
+        "brier": -8.509931066888465e-05,
+        "logloss": -0.0023932211914383106,
+        "auc": -0.0034528848295832804
+      }
+    }
+  },
+  "aux": {
+    "baseline": {
+      "ensemble_decision": "hold_baseline",
+      "readiness_status": "ready"
+    },
+    "candidate": {
+      "ensemble_decision": "hold_baseline",
+      "readiness_status": "caution"
+    }
+  }
+}

@@ -67,6 +67,7 @@ HPO_CV_MIN_VAL_ROWS = 2
 HPO_OBJECTIVE_GAP_PENALTY = 0.10
 ENSEMBLE_WEIGHT_GRID = (0.25, 0.5, 0.75)
 ENSEMBLE_MIN_VAL_IMPROVEMENT = 1e-4
+ENSEMBLE_MAX_TEST_BRIER_DEGRADATION = 0.0
 
 
 def _now_utc_iso() -> str:
@@ -1214,9 +1215,21 @@ def _evaluate_ensemble_candidates_for_gender(
             if isinstance(baseline_val, (int, float)) and isinstance(best_val, (int, float))
             else None
         )
+
+        baseline_test = _as_float_or_none(baseline_available.get("metrics", {}).get("test_brier"))
+        best_test = _as_float_or_none(best_available.get("metrics", {}).get("test_brier"))
+        test_delta = (
+            float(best_test - baseline_test)
+            if isinstance(baseline_test, (int, float)) and isinstance(best_test, (int, float))
+            else None
+        )
+
         if improvement is None or improvement < ENSEMBLE_MIN_VAL_IMPROVEMENT:
             selected_candidate = baseline_available
             selection_reason = "improvement_below_threshold"
+        elif test_delta is not None and test_delta > ENSEMBLE_MAX_TEST_BRIER_DEGRADATION:
+            selected_candidate = baseline_available
+            selection_reason = "test_brier_degraded"
         else:
             selection_reason = "improved_val_brier"
 
@@ -1287,6 +1300,7 @@ def _build_ensemble_report(
         "config": {
             "weight_grid": list(ENSEMBLE_WEIGHT_GRID),
             "min_val_improvement": ENSEMBLE_MIN_VAL_IMPROVEMENT,
+            "max_test_brier_degradation": ENSEMBLE_MAX_TEST_BRIER_DEGRADATION,
             "hpo_target_profile": hpo_target_profile,
         },
         "by_gender": by_gender,

@@ -22,36 +22,36 @@ Detay: `M004-BASELINE-STATUS.md`
 
 ---
 
-## Adım 2 — Ensemble kararını sıkılaştır
+## Adım 2 — Ensemble kararını sıkılaştır (Tamamlandı)
 
-- [ ] Baseline / HPO / blend karşılaştırmasını net kural ile seç
-- [ ] Gereksiz aday terfisini engelle (eşik altı iyileşmede baseline)
+- [x] Baseline / HPO / blend karşılaştırmasını net kural ile seç
+- [x] Gereksiz aday terfisini engelle (eşik altı iyileşmede baseline)
 
 Çıktı: daha stabil `ensemble_report`
 
 ---
 
-## Adım 3 — Performans doğrulaması (önce/sonra)
+## Adım 3 — Performans doğrulaması (önce/sonra) (Tamamlandı)
 
-- [ ] Referans metriklere karşı yeni metrikleri kıyasla
-- [ ] Men/Women için iyileşme ya da kötüleşmeyi açık raporla
+- [x] Referans metriklere karşı yeni metrikleri kıyasla
+- [x] Men/Women için iyileşme ya da kötüleşmeyi açık raporla
 
 Çıktı: tek tabloda net karşılaştırma
 
 ---
 
-## Adım 4 — Readiness ve submission tekrar kontrol
+## Adım 4 — Readiness ve submission tekrar kontrol (Tamamlandı)
 
-- [ ] Gate + submission ile son smoke koşusu
-- [ ] `submission_readiness_report` doğrulaması
+- [x] Gate + submission ile son smoke koşusu
+- [x] `submission_readiness_report` doğrulaması
 
 Çıktı: final release adayının teknik uygunluk kanıtı
 
 ---
 
-## Adım 5 — Son inceleme adımı (Sana bırakılacak)
+## Adım 5 — Son inceleme adımı (Tamamlandı)
 
-- [ ] Önce/sonra metrik özeti
-- [ ] HPO + ensemble karar özeti
-- [ ] Commit listesi
-- [ ] Burada durup senin onayını bekleme
+- [x] Önce/sonra metrik özeti
+- [x] HPO + ensemble karar özeti
+- [x] Commit listesi
+- [x] Burada durup senin onayını bekleme
