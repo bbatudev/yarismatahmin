@@ -12,8 +12,6 @@ Guidelines:
 
 ## Active
 
-- none
-
 ## Validated
 
 ### R001 — Canonical end-to-end run command
@@ -155,9 +153,9 @@ Guidelines:
 - Why it matters: Araştırmadan yarışma teslimine geçişi güvenli hale getirir.
 - Source: user
 - Primary owning slice: M001/S07
-- Supporting slices: M003/S01 (provisional)
+- Supporting slices: M003/S04
 - Validation: validated by execution
-- Notes: S07’de `--submission-stage stage2` runtime proof’u ile `submission_stage2.csv` + strict validation report (`submission_validation_report.json`) kontratı doğrulandı.
+- Notes: S07’de `--submission-stage stage2` runtime proof’u ile `submission_stage2.csv` + strict validation report (`submission_validation_report.json`) kontratı doğrulandı; M003/S04’te bu sinyaller `submission_readiness_report.json` altında final readiness fusion kararına bağlandı.
 
 ### R019 — Single execution path enforcement
 - Class: constraint
@@ -181,29 +179,29 @@ Guidelines:
 - Validation: validated by execution
 - Notes: S02’de `calibration_policy_report.json` + `stage_outputs.eval_report.calibration_policy` contract’ı test-suite ve `m002_s02_policy_smoke` runtime proof ile doğrulandı.
 
-## Deferred
-
 ### R013 — Hyperparameter optimization (Optuna)
 - Class: quality-attribute
-- Status: deferred
+- Status: validated
 - Description: Hiperparametre araması ile baseline üstü performans aranması.
-- Why it matters: M001 sonrası performans tavanını yükseltir.
+- Why it matters: M003 model kalite tavanını yükseltir.
 - Source: user
-- Primary owning slice: M002/S02 (provisional)
-- Supporting slices: none
-- Validation: unmapped
-- Notes: Önce canonical foundation stabilize edilecek.
+- Primary owning slice: M003/S02
+- Supporting slices: M003/S01
+- Validation: validated by execution
+- Notes: S02’de deterministic HPO trial harness (`--hpo-trials`, `hpo_report.json`, `stage_outputs.train.hpo`) test-suite ve `m003_s02_hpo_smoke` runtime proof ile doğrulandı.
 
 ### R015 — Ensemble layer beyond baseline LGBM
 - Class: core-capability
-- Status: deferred
+- Status: validated
 - Description: Birden çok modelin weighted/stacked kombinasyonu.
 - Why it matters: Tek model kırılganlığını azaltabilir.
 - Source: inferred
-- Primary owning slice: M003/S02 (provisional)
-- Supporting slices: none
-- Validation: unmapped
-- Notes: Önce tek-model governance ve regression gate olgunlaşmalı.
+- Primary owning slice: M003/S03
+- Supporting slices: M003/S02
+- Validation: validated by execution
+- Notes: S03’te `ensemble_report.json` + `stage_outputs.eval_report.ensemble` contract’ı test-suite ve `m003_s03_ensemble_smoke` runtime proof ile doğrulandı.
+
+## Deferred
 
 ## Out of Scope
 
@@ -244,12 +242,12 @@ Guidelines:
 | R009 | quality-attribute | validated | M001/S05 | M002/S01 | validated (S05 ablation delta contract tests + canonical smoke run artifact assertions) |
 | R010 | launchability | validated | M001/S06 | M001/S07 | validated (S06 artifact contract report + required-file fail-fast checks in runtime and tests) |
 | R011 | continuity | validated | M001/S06 | none | validated (S06 reproducibility report with same commit+seed tolerance pass/fail enforcement) |
-| R012 | integration | validated | M001/S07 | M003/S01 | validated (S07 submission stage runtime proof + strict `ID,Pred` validation report checks) |
+| R012 | integration | validated | M001/S07 | M003/S04 | validated (S07 submission stage runtime proof + strict `ID,Pred` validation report checks + S04 readiness fusion report) |
 | R014 | differentiator | validated | M002/S02 | M002/S01,S03 | validated (S02 policy report contract + canonical smoke proof) |
 | R018 | failure-visibility | validated | M001/S06 | M002/S01,S03,S04 | validated (S06 regression gate report + S04 policy-gated fallback diagnostics) |
 | R019 | constraint | validated | M001/S03 | M001/S07 | validated (S03 notebook authority guardrail test) |
-| R013 | quality-attribute | deferred | M002/S02 | none | unmapped |
-| R015 | core-capability | deferred | M003/S02 | none | unmapped |
+| R013 | quality-attribute | validated | M003/S02 | M003/S01 | validated (S02 deterministic HPO report contract + canonical smoke proof) |
+| R015 | core-capability | validated | M003/S03 | M003/S02 | validated (S03 ensemble report contract + canonical smoke proof) |
 | R016 | anti-feature | out-of-scope | none | none | n/a |
 | R017 | anti-feature | out-of-scope | none | none | n/a |
 
@@ -257,5 +255,5 @@ Guidelines:
 
 - Active requirements: 0
 - Mapped to slices: 0
-- Validated: 15
+- Validated: 17
 - Unmapped active requirements: 0

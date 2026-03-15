@@ -51,6 +51,18 @@ DRIFT_REGIME_ORDER = ("close", "medium", "wide")
 CALIBRATION_POLICY_METHODS = ("none", "platt", "isotonic")
 CALIBRATION_POLICY_MIN_VAL_SAMPLES = 80
 CALIBRATION_POLICY_MIN_IMPROVEMENT = 0.001
+HPO_ALLOWED_PROFILES = ("baseline", "quality_v1")
+HPO_MAX_TRIALS = 20
+HPO_PARAM_SPACE = {
+    "learning_rate": [0.02, 0.03, 0.05, 0.07],
+    "num_leaves": [31, 47, 63],
+    "min_child_samples": [10, 15, 20, 30],
+    "colsample_bytree": [0.7, 0.8, 0.9, 1.0],
+    "subsample": [0.7, 0.8, 0.9, 1.0],
+    "n_estimators": [800, 1000, 1200, 1400],
+}
+ENSEMBLE_WEIGHT_GRID = (0.25, 0.5, 0.75)
+ENSEMBLE_MIN_VAL_IMPROVEMENT = 1e-4
 
 
 def _now_utc_iso() -> str:
@@ -239,6 +251,9 @@ def _metadata_view(context: dict[str, Any]) -> dict[str, Any]:
         "run_label": context.get("run_label"),
         "artifacts_root": context.get("artifacts_root"),
         "run_dir": context.get("run_dir"),
+        "training_profile": context.get("training_profile"),
+        "hpo_trials": context.get("hpo_trials"),
+        "hpo_target_profile": context.get("hpo_target_profile"),
         "status": context.get("status"),
         "finished_at": context.get("finished_at"),
         "duration_ms": context.get("duration_ms"),
@@ -336,6 +351,175 @@ def stage_feature(context: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _train_with_optional_profile(
+    *,
+    train_module: Any,
+    df: pd.DataFrame,
+    gender_label: str,
+    random_state: int,
+    profile: str,
+    param_overrides: dict[str, Any] | None = None,
+) -> tuple[Any, dict[str, Any]]:
+    attempts: list[dict[str, Any]] = []
+
+    if param_overrides is not None:
+        attempts.append(
+            {
+                "random_state": random_state,
+                "profile": profile,
+                "param_overrides": param_overrides,
+            }
+        )
+
+    attempts.append(
+        {
+            "random_state": random_state,
+            "profile": profile,
+        }
+    )
+
+    attempts.append(
+        {
+            "random_state": random_state,
+        }
+    )
+
+    last_exc: Exception | None = None
+    for kwargs in attempts:
+        try:
+            return train_module.train_baseline(df, gender_label, **kwargs)
+        except TypeError as exc:
+            message = str(exc)
+            if "unexpected keyword argument" not in message:
+                raise
+            last_exc = exc
+            continue
+
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError(f"[{gender_label}] failed to call train_baseline")
+
+
+def _build_hpo_trial_param_overrides(*, seed: int, trials: int) -> list[dict[str, Any]]:
+    rng = np.random.default_rng(int(seed))
+    candidates: list[dict[str, Any]] = []
+    for _ in range(int(trials)):
+        candidate = {
+            key: values[int(rng.integers(0, len(values)))]
+            for key, values in HPO_PARAM_SPACE.items()
+        }
+        candidates.append(candidate)
+    return candidates
+
+
+def _run_hpo_search_for_gender(
+    *,
+    train_module: Any,
+    df: pd.DataFrame,
+    gender_key: str,
+    seed: int,
+    target_profile: str,
+    trial_overrides: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if not trial_overrides:
+        return {
+            "status": "skipped",
+            "reason": "no_trials_requested",
+            "target_profile": target_profile,
+            "trials_requested": 0,
+            "trials_executed": 0,
+            "best_trial_id": None,
+            "best_val_brier": None,
+            "candidates": [],
+        }
+
+    gender_label = "M" if gender_key == "men" else "W"
+    candidates: list[dict[str, Any]] = []
+    successful: list[dict[str, Any]] = []
+
+    for trial_index, overrides in enumerate(trial_overrides, start=1):
+        trial_seed = int(seed) + trial_index
+        candidate_payload: dict[str, Any] = {
+            "trial_id": trial_index,
+            "seed": trial_seed,
+            "param_overrides": overrides,
+            "status": "failed",
+            "reason": None,
+            "metrics": {},
+        }
+
+        try:
+            _, payload = _train_with_optional_profile(
+                train_module=train_module,
+                df=df,
+                gender_label=gender_label,
+                random_state=trial_seed,
+                profile=target_profile,
+                param_overrides=overrides,
+            )
+        except Exception as exc:
+            candidate_payload["reason"] = f"trial_failed:{exc.__class__.__name__}"
+            candidates.append(candidate_payload)
+            continue
+
+        metrics_by_split = payload.get("metrics_by_split", {}) if isinstance(payload, dict) else {}
+        val_metrics = metrics_by_split.get("Val", {}) if isinstance(metrics_by_split, dict) else {}
+        test_metrics = metrics_by_split.get("Test", {}) if isinstance(metrics_by_split, dict) else {}
+        val_brier = _as_float_or_none(val_metrics.get("brier"))
+
+        candidate_payload.update(
+            {
+                "status": "passed" if val_brier is not None else "failed",
+                "reason": None if val_brier is not None else "missing_val_brier",
+                "metrics": {
+                    "val_brier": val_brier,
+                    "val_logloss": _as_float_or_none(val_metrics.get("logloss")),
+                    "val_auc": _as_float_or_none(val_metrics.get("auc")),
+                    "test_brier": _as_float_or_none(test_metrics.get("brier")),
+                },
+            }
+        )
+
+        candidates.append(candidate_payload)
+        if candidate_payload["status"] == "passed":
+            successful.append(candidate_payload)
+
+    if not successful:
+        return {
+            "status": "failed",
+            "reason": "no_successful_trials",
+            "target_profile": target_profile,
+            "trials_requested": len(trial_overrides),
+            "trials_executed": 0,
+            "best_trial_id": None,
+            "best_val_brier": None,
+            "candidates": candidates,
+        }
+
+    best = min(
+        successful,
+        key=lambda candidate: (
+            candidate.get("metrics", {}).get("val_brier")
+            if isinstance(candidate.get("metrics", {}).get("val_brier"), (int, float))
+            else float("inf"),
+            int(candidate.get("trial_id", 0)),
+        ),
+    )
+
+    return {
+        "status": "passed",
+        "reason": None,
+        "target_profile": target_profile,
+        "trials_requested": len(trial_overrides),
+        "trials_executed": len(successful),
+        "best_trial_id": int(best.get("trial_id", 0)),
+        "best_val_brier": best.get("metrics", {}).get("val_brier"),
+        "best_test_brier": best.get("metrics", {}).get("test_brier"),
+        "best_param_overrides": best.get("param_overrides", {}),
+        "candidates": candidates,
+    }
+
+
 def stage_train(context: dict[str, Any]) -> dict[str, Any]:
     feature_outputs = context.get("stage_outputs", {}).get("feature", {})
     gates = feature_outputs.get("gates", {})
@@ -364,8 +548,103 @@ def stage_train(context: dict[str, Any]) -> dict[str, Any]:
     if men_df is None or women_df is None:
         raise RuntimeError("Training data missing; feature stage did not produce required files")
 
-    men_model, men_payload = train_module.train_baseline(men_df, "M", random_state=context["seed"])
-    women_model, women_payload = train_module.train_baseline(women_df, "W", random_state=context["seed"])
+    training_profile = str(context.get("training_profile", "baseline")).strip().lower()
+
+    men_model, men_payload = _train_with_optional_profile(
+        train_module=train_module,
+        df=men_df,
+        gender_label="M",
+        random_state=context["seed"],
+        profile=training_profile,
+    )
+    women_model, women_payload = _train_with_optional_profile(
+        train_module=train_module,
+        df=women_df,
+        gender_label="W",
+        random_state=context["seed"],
+        profile=training_profile,
+    )
+
+    hpo_trials_raw = int(context.get("hpo_trials", 0) or 0)
+    if hpo_trials_raw < 0:
+        raise RuntimeError("hpo_trials must be >= 0")
+    hpo_trials = min(hpo_trials_raw, HPO_MAX_TRIALS)
+
+    hpo_target_profile = str(context.get("hpo_target_profile", "quality_v1")).strip().lower()
+    if hpo_target_profile not in HPO_ALLOWED_PROFILES:
+        raise RuntimeError(
+            f"unknown hpo target profile: {hpo_target_profile}. allowed={','.join(HPO_ALLOWED_PROFILES)}"
+        )
+
+    hpo_trial_overrides = _build_hpo_trial_param_overrides(seed=context["seed"], trials=hpo_trials)
+    hpo_by_gender = {
+        "men": _run_hpo_search_for_gender(
+            train_module=train_module,
+            df=men_df,
+            gender_key="men",
+            seed=context["seed"],
+            target_profile=hpo_target_profile,
+            trial_overrides=hpo_trial_overrides,
+        ),
+        "women": _run_hpo_search_for_gender(
+            train_module=train_module,
+            df=women_df,
+            gender_key="women",
+            seed=context["seed"] + 10_000,
+            target_profile=hpo_target_profile,
+            trial_overrides=hpo_trial_overrides,
+        ),
+    }
+
+    hpo_status = "skipped"
+    if hpo_trials > 0:
+        if any(payload.get("status") == "passed" for payload in hpo_by_gender.values() if isinstance(payload, dict)):
+            hpo_status = "passed"
+        else:
+            hpo_status = "failed"
+
+    run_dir_raw = context.get("run_dir")
+    if isinstance(run_dir_raw, str) and run_dir_raw.strip():
+        run_dir = Path(run_dir_raw)
+    else:
+        run_dir = PIPELINE_DIR / "artifacts" / "runs" / "_train_stage"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    hpo_report_payload = {
+        "run_id": context.get("run_id"),
+        "seed": context.get("seed"),
+        "generated_at": _now_utc_iso(),
+        "status": hpo_status,
+        "config": {
+            "trials_requested": hpo_trials_raw,
+            "trials_executed": hpo_trials,
+            "max_trials": HPO_MAX_TRIALS,
+            "target_profile": hpo_target_profile,
+            "param_space": HPO_PARAM_SPACE,
+        },
+        "by_gender": hpo_by_gender,
+    }
+    hpo_report_path = run_dir / "hpo_report.json"
+    _write_json(hpo_report_path, hpo_report_payload)
+
+    hpo_payload = {
+        "status": hpo_status,
+        "report_json": str(hpo_report_path),
+        "target_profile": hpo_target_profile,
+        "trials_requested": hpo_trials_raw,
+        "trials_executed": hpo_trials,
+        "by_gender": {
+            gender_key: {
+                "status": payload.get("status"),
+                "best_trial_id": payload.get("best_trial_id"),
+                "best_val_brier": payload.get("best_val_brier"),
+                "best_test_brier": payload.get("best_test_brier"),
+                "best_param_overrides": payload.get("best_param_overrides"),
+            }
+            for gender_key, payload in hpo_by_gender.items()
+            if isinstance(payload, dict)
+        },
+    }
 
     model_dir = Path(train_module.OUT_DIR)
     men_model_path = model_dir / f"lgbm_baseline_men_{context['run_id']}.pkl"
@@ -380,6 +659,8 @@ def stage_train(context: dict[str, Any]) -> dict[str, Any]:
         "men": {
             "gender": men_payload.get("gender", "M"),
             "model_path": str(men_model_path),
+            "training_profile": men_payload.get("training_profile", training_profile),
+            "training_params": men_payload.get("training_params", {}),
             "metrics_by_split": men_payload.get("metrics_by_split", {}),
             "feature_snapshot": men_payload.get("feature_snapshot", {}),
             "best_iteration": men_payload.get("best_iteration"),
@@ -387,6 +668,8 @@ def stage_train(context: dict[str, Any]) -> dict[str, Any]:
         "women": {
             "gender": women_payload.get("gender", "W"),
             "model_path": str(women_model_path),
+            "training_profile": women_payload.get("training_profile", training_profile),
+            "training_params": women_payload.get("training_params", {}),
             "metrics_by_split": women_payload.get("metrics_by_split", {}),
             "feature_snapshot": women_payload.get("feature_snapshot", {}),
             "best_iteration": women_payload.get("best_iteration"),
@@ -394,6 +677,8 @@ def stage_train(context: dict[str, Any]) -> dict[str, Any]:
     }
 
     return {
+        "training_profile": training_profile,
+        "hpo": hpo_payload,
         "genders": genders,
         "models": {
             "men": genders["men"]["model_path"],
@@ -426,6 +711,473 @@ def _as_float_or_none(value: Any) -> float | None:
         if np.isfinite(numeric):
             return numeric
     return None
+
+
+def _score_val_test_from_split_probabilities(
+    *,
+    gender_key: str,
+    split_probabilities: dict[str, dict[str, np.ndarray]],
+) -> dict[str, Any]:
+    val_cache = split_probabilities.get("Val", {}) if isinstance(split_probabilities, dict) else {}
+    test_cache = split_probabilities.get("Test", {}) if isinstance(split_probabilities, dict) else {}
+
+    val_true = np.asarray(val_cache.get("y_true", np.asarray([], dtype=float)), dtype=float)
+    val_prob = np.asarray(val_cache.get("y_prob", np.asarray([], dtype=float)), dtype=float)
+    test_true = np.asarray(test_cache.get("y_true", np.asarray([], dtype=float)), dtype=float)
+    test_prob = np.asarray(test_cache.get("y_prob", np.asarray([], dtype=float)), dtype=float)
+
+    return {
+        "val": _score_probability_bundle(
+            gender_key=gender_key,
+            split_label="Val",
+            y_true=val_true,
+            y_prob=val_prob,
+        ),
+        "test": _score_probability_bundle(
+            gender_key=gender_key,
+            split_label="Test",
+            y_true=test_true,
+            y_prob=test_prob,
+        ),
+        "cache": {
+            "val_true": val_true,
+            "val_prob": val_prob,
+            "test_true": test_true,
+            "test_prob": test_prob,
+        },
+    }
+
+
+def _predict_model_split_probabilities(
+    *,
+    model: Any,
+    feature_df: pd.DataFrame,
+    feature_columns: list[str],
+    gender_key: str,
+) -> dict[str, dict[str, np.ndarray]]:
+    split_cache: dict[str, dict[str, np.ndarray]] = {}
+    for split_label in ("Val", "Test"):
+        split_df = feature_df[feature_df["Split"] == split_label].copy()
+        if split_df.empty:
+            split_cache[split_label] = {
+                "y_true": np.asarray([], dtype=float),
+                "y_prob": np.asarray([], dtype=float),
+            }
+            continue
+
+        split_features = split_df.loc[:, feature_columns]
+        split_true = split_df["Target"].to_numpy(dtype=float)
+        raw_probs = model.predict_proba(split_features)
+        split_prob = _extract_positive_class_probabilities(
+            raw_probs,
+            gender_key=gender_key,
+            split_label=split_label,
+        )
+        split_cache[split_label] = {
+            "y_true": split_true,
+            "y_prob": split_prob,
+        }
+
+    return split_cache
+
+
+def _evaluate_ensemble_candidates_for_gender(
+    *,
+    context: dict[str, Any],
+    train_module: Any,
+    gender_key: str,
+    feature_df: pd.DataFrame,
+    baseline_split_probabilities: dict[str, dict[str, np.ndarray]],
+    hpo_gender_payload: dict[str, Any],
+    hpo_target_profile: str,
+) -> dict[str, Any]:
+    candidates: list[dict[str, Any]] = []
+
+    baseline_scores = _score_val_test_from_split_probabilities(
+        gender_key=gender_key,
+        split_probabilities=baseline_split_probabilities,
+    )
+    baseline_val_brier = _as_float_or_none(baseline_scores["val"].get("brier"))
+    baseline_test_brier = _as_float_or_none(baseline_scores["test"].get("brier"))
+    baseline_candidate = {
+        "candidate_id": "baseline",
+        "source": "train_stage_model",
+        "status": "available" if baseline_val_brier is not None else "failed",
+        "reason": None if baseline_val_brier is not None else "missing_val_brier",
+        "param_overrides": None,
+        "weights": None,
+        "metrics": {
+            "val": baseline_scores["val"],
+            "test": baseline_scores["test"],
+            "val_brier": baseline_val_brier,
+            "test_brier": baseline_test_brier,
+        },
+    }
+    candidates.append(baseline_candidate)
+
+    hpo_split_cache: dict[str, dict[str, np.ndarray]] | None = None
+
+    best_overrides = (
+        hpo_gender_payload.get("best_param_overrides") if isinstance(hpo_gender_payload, dict) else None
+    )
+    if isinstance(best_overrides, dict) and best_overrides:
+        gender_label = "M" if gender_key == "men" else "W"
+        random_state = int(context.get("seed", 42)) + (1000 if gender_key == "men" else 2000)
+        try:
+            hpo_model, hpo_train_payload = _train_with_optional_profile(
+                train_module=train_module,
+                df=feature_df,
+                gender_label=gender_label,
+                random_state=random_state,
+                profile=hpo_target_profile,
+                param_overrides=best_overrides,
+            )
+            hpo_snapshot = hpo_train_payload.get("feature_snapshot", {}) if isinstance(hpo_train_payload, dict) else {}
+            hpo_feature_columns = (
+                hpo_snapshot.get("feature_columns") if isinstance(hpo_snapshot, dict) else None
+            )
+            if not isinstance(hpo_feature_columns, list) or not hpo_feature_columns:
+                raise RuntimeError("hpo_feature_columns_missing")
+
+            hpo_split_cache = _predict_model_split_probabilities(
+                model=hpo_model,
+                feature_df=feature_df,
+                feature_columns=hpo_feature_columns,
+                gender_key=gender_key,
+            )
+            hpo_scores = _score_val_test_from_split_probabilities(
+                gender_key=gender_key,
+                split_probabilities=hpo_split_cache,
+            )
+            hpo_val_brier = _as_float_or_none(hpo_scores["val"].get("brier"))
+            hpo_test_brier = _as_float_or_none(hpo_scores["test"].get("brier"))
+            candidates.append(
+                {
+                    "candidate_id": "hpo_best",
+                    "source": "hpo_best_overrides",
+                    "status": "available" if hpo_val_brier is not None else "failed",
+                    "reason": None if hpo_val_brier is not None else "missing_val_brier",
+                    "param_overrides": best_overrides,
+                    "weights": None,
+                    "metrics": {
+                        "val": hpo_scores["val"],
+                        "test": hpo_scores["test"],
+                        "val_brier": hpo_val_brier,
+                        "test_brier": hpo_test_brier,
+                    },
+                }
+            )
+        except Exception as exc:
+            candidates.append(
+                {
+                    "candidate_id": "hpo_best",
+                    "source": "hpo_best_overrides",
+                    "status": "failed",
+                    "reason": f"hpo_retrain_failed:{exc.__class__.__name__}",
+                    "param_overrides": best_overrides,
+                    "weights": None,
+                    "metrics": {
+                        "val": {},
+                        "test": {},
+                        "val_brier": None,
+                        "test_brier": None,
+                    },
+                }
+            )
+    else:
+        candidates.append(
+            {
+                "candidate_id": "hpo_best",
+                "source": "hpo_best_overrides",
+                "status": "skipped",
+                "reason": "best_param_overrides_unavailable",
+                "param_overrides": None,
+                "weights": None,
+                "metrics": {
+                    "val": {},
+                    "test": {},
+                    "val_brier": None,
+                    "test_brier": None,
+                },
+            }
+        )
+
+    if hpo_split_cache is not None:
+        baseline_val_prob = baseline_scores["cache"]["val_prob"]
+        hpo_val_prob = np.asarray(hpo_split_cache.get("Val", {}).get("y_prob", np.asarray([], dtype=float)), dtype=float)
+        baseline_test_prob = baseline_scores["cache"]["test_prob"]
+        hpo_test_prob = np.asarray(hpo_split_cache.get("Test", {}).get("y_prob", np.asarray([], dtype=float)), dtype=float)
+        val_true = baseline_scores["cache"]["val_true"]
+        test_true = baseline_scores["cache"]["test_true"]
+
+        if (
+            baseline_val_prob.shape == hpo_val_prob.shape
+            and baseline_test_prob.shape == hpo_test_prob.shape
+            and val_true.shape == baseline_val_prob.shape
+            and test_true.shape == baseline_test_prob.shape
+        ):
+            weight_candidates: list[dict[str, Any]] = []
+            for baseline_weight in ENSEMBLE_WEIGHT_GRID:
+                hpo_weight = 1.0 - float(baseline_weight)
+                blended_val = np.clip(
+                    float(baseline_weight) * baseline_val_prob + hpo_weight * hpo_val_prob,
+                    0.0,
+                    1.0,
+                )
+                blended_test = np.clip(
+                    float(baseline_weight) * baseline_test_prob + hpo_weight * hpo_test_prob,
+                    0.0,
+                    1.0,
+                )
+                val_metrics = _score_probability_bundle(
+                    gender_key=gender_key,
+                    split_label="Val",
+                    y_true=val_true,
+                    y_prob=blended_val,
+                )
+                test_metrics = _score_probability_bundle(
+                    gender_key=gender_key,
+                    split_label="Test",
+                    y_true=test_true,
+                    y_prob=blended_test,
+                )
+                weight_candidates.append(
+                    {
+                        "baseline_weight": float(baseline_weight),
+                        "hpo_weight": float(hpo_weight),
+                        "val": val_metrics,
+                        "test": test_metrics,
+                        "val_brier": _as_float_or_none(val_metrics.get("brier")),
+                        "test_brier": _as_float_or_none(test_metrics.get("brier")),
+                    }
+                )
+
+            valid_weight_candidates = [
+                row for row in weight_candidates if isinstance(row.get("val_brier"), (int, float))
+            ]
+            if valid_weight_candidates:
+                best_weight_row = min(
+                    valid_weight_candidates,
+                    key=lambda row: (
+                        float(row["val_brier"]),
+                        abs(0.5 - float(row.get("baseline_weight", 0.5))),
+                    ),
+                )
+                candidates.append(
+                    {
+                        "candidate_id": "ensemble_weighted",
+                        "source": "baseline_hpo_blend",
+                        "status": "available",
+                        "reason": None,
+                        "param_overrides": best_overrides,
+                        "weights": {
+                            "baseline": best_weight_row["baseline_weight"],
+                            "hpo_best": best_weight_row["hpo_weight"],
+                        },
+                        "metrics": {
+                            "val": best_weight_row["val"],
+                            "test": best_weight_row["test"],
+                            "val_brier": best_weight_row["val_brier"],
+                            "test_brier": best_weight_row["test_brier"],
+                        },
+                    }
+                )
+            else:
+                candidates.append(
+                    {
+                        "candidate_id": "ensemble_weighted",
+                        "source": "baseline_hpo_blend",
+                        "status": "failed",
+                        "reason": "ensemble_val_brier_missing",
+                        "param_overrides": best_overrides,
+                        "weights": None,
+                        "metrics": {
+                            "val": {},
+                            "test": {},
+                            "val_brier": None,
+                            "test_brier": None,
+                        },
+                    }
+                )
+        else:
+            candidates.append(
+                {
+                    "candidate_id": "ensemble_weighted",
+                    "source": "baseline_hpo_blend",
+                    "status": "failed",
+                    "reason": "probability_shape_mismatch",
+                    "param_overrides": best_overrides,
+                    "weights": None,
+                    "metrics": {
+                        "val": {},
+                        "test": {},
+                        "val_brier": None,
+                        "test_brier": None,
+                    },
+                }
+            )
+    else:
+        candidates.append(
+            {
+                "candidate_id": "ensemble_weighted",
+                "source": "baseline_hpo_blend",
+                "status": "skipped",
+                "reason": "hpo_candidate_unavailable",
+                "param_overrides": None,
+                "weights": None,
+                "metrics": {
+                    "val": {},
+                    "test": {},
+                    "val_brier": None,
+                    "test_brier": None,
+                },
+            }
+        )
+
+    available_candidates = [
+        row
+        for row in candidates
+        if row.get("status") == "available" and isinstance(row.get("metrics", {}).get("val_brier"), (int, float))
+    ]
+
+    if not available_candidates:
+        return {
+            "status": "failed",
+            "reason": "no_available_candidates",
+            "selected_candidate_id": None,
+            "selection_reason": "no_available_candidates",
+            "selected_val_brier": None,
+            "selected_test_brier": None,
+            "selection_signal": "hold_baseline",
+            "candidates": candidates,
+        }
+
+    best_available = min(
+        available_candidates,
+        key=lambda row: (
+            float(row.get("metrics", {}).get("val_brier")),
+            row.get("candidate_id") != "ensemble_weighted",
+            row.get("candidate_id") != "hpo_best",
+        ),
+    )
+
+    baseline_available = next(
+        (row for row in available_candidates if row.get("candidate_id") == "baseline"),
+        None,
+    )
+
+    selected_candidate = best_available
+    selection_reason = "best_val_brier"
+    if baseline_available is not None and best_available.get("candidate_id") != "baseline":
+        baseline_val = _as_float_or_none(baseline_available.get("metrics", {}).get("val_brier"))
+        best_val = _as_float_or_none(best_available.get("metrics", {}).get("val_brier"))
+        improvement = (
+            float(baseline_val - best_val)
+            if isinstance(baseline_val, (int, float)) and isinstance(best_val, (int, float))
+            else None
+        )
+        if improvement is None or improvement < ENSEMBLE_MIN_VAL_IMPROVEMENT:
+            selected_candidate = baseline_available
+            selection_reason = "improvement_below_threshold"
+        else:
+            selection_reason = "improved_val_brier"
+
+    selected_candidate_id = selected_candidate.get("candidate_id")
+    selection_signal = "promote_non_baseline" if selected_candidate_id != "baseline" else "hold_baseline"
+
+    return {
+        "status": "passed",
+        "reason": None,
+        "selected_candidate_id": selected_candidate_id,
+        "selection_reason": selection_reason,
+        "selected_val_brier": _as_float_or_none(selected_candidate.get("metrics", {}).get("val_brier")),
+        "selected_test_brier": _as_float_or_none(selected_candidate.get("metrics", {}).get("test_brier")),
+        "selection_signal": selection_signal,
+        "selected_weights": selected_candidate.get("weights"),
+        "selected_param_overrides": selected_candidate.get("param_overrides"),
+        "candidates": candidates,
+    }
+
+
+def _build_ensemble_report(
+    *,
+    context: dict[str, Any],
+    train_result: dict[str, Any],
+    train_module: Any,
+    feature_frames_by_gender: dict[str, pd.DataFrame],
+    split_probabilities: dict[str, dict[str, dict[str, np.ndarray]]],
+) -> dict[str, Any]:
+    hpo_payload = train_result.get("hpo", {}) if isinstance(train_result, dict) else {}
+    hpo_target_profile = str(hpo_payload.get("target_profile", "quality_v1"))
+
+    hpo_report_by_gender: dict[str, Any] = {}
+    report_path_value = hpo_payload.get("report_json") if isinstance(hpo_payload, dict) else None
+    if isinstance(report_path_value, str) and report_path_value.strip():
+        hpo_report_path = Path(report_path_value)
+        if hpo_report_path.exists():
+            try:
+                hpo_report_payload = json.loads(hpo_report_path.read_text(encoding="utf-8"))
+            except Exception:
+                hpo_report_payload = {}
+            by_gender_payload = hpo_report_payload.get("by_gender", {}) if isinstance(hpo_report_payload, dict) else {}
+            if isinstance(by_gender_payload, dict):
+                hpo_report_by_gender = by_gender_payload
+
+    by_gender: dict[str, Any] = {}
+    for gender_key in ("men", "women"):
+        by_gender[gender_key] = _evaluate_ensemble_candidates_for_gender(
+            context=context,
+            train_module=train_module,
+            gender_key=gender_key,
+            feature_df=feature_frames_by_gender.get(gender_key, pd.DataFrame()),
+            baseline_split_probabilities=split_probabilities.get(gender_key, {}),
+            hpo_gender_payload=hpo_report_by_gender.get(gender_key, {}),
+            hpo_target_profile=hpo_target_profile,
+        )
+
+    promoted_genders = [
+        gender_key
+        for gender_key, payload in by_gender.items()
+        if isinstance(payload, dict) and payload.get("selection_signal") == "promote_non_baseline"
+    ]
+
+    aggregate_decision = "adopt_non_baseline_candidates" if promoted_genders else "hold_baseline"
+    ensemble_report_payload = {
+        "run_id": context.get("run_id"),
+        "seed": context.get("seed"),
+        "generated_at": _now_utc_iso(),
+        "config": {
+            "weight_grid": list(ENSEMBLE_WEIGHT_GRID),
+            "min_val_improvement": ENSEMBLE_MIN_VAL_IMPROVEMENT,
+            "hpo_target_profile": hpo_target_profile,
+        },
+        "by_gender": by_gender,
+        "aggregate": {
+            "decision": aggregate_decision,
+            "promoted_genders": promoted_genders,
+        },
+    }
+
+    report_path = Path(context["run_dir"]) / "ensemble_report.json"
+    _write_json(report_path, ensemble_report_payload)
+
+    return {
+        "report_json": str(report_path),
+        "config": ensemble_report_payload["config"],
+        "by_gender": {
+            gender_key: {
+                "status": payload.get("status"),
+                "selected_candidate_id": payload.get("selected_candidate_id"),
+                "selection_reason": payload.get("selection_reason"),
+                "selection_signal": payload.get("selection_signal"),
+                "selected_val_brier": payload.get("selected_val_brier"),
+                "selected_test_brier": payload.get("selected_test_brier"),
+            }
+            for gender_key, payload in by_gender.items()
+            if isinstance(payload, dict)
+        },
+        "aggregate": ensemble_report_payload["aggregate"],
+    }
 
 
 def _extract_run_snapshot(stage_outputs: dict[str, Any]) -> dict[str, Any]:
@@ -800,6 +1552,110 @@ def _build_optional_submission(context: dict[str, Any]) -> dict[str, Any]:
 
     report_payload["validation_report_json"] = str(report_path)
     return report_payload
+
+
+def _evaluate_submission_readiness(
+    *,
+    context: dict[str, Any],
+    artifact_contract_payload: dict[str, Any],
+    reproducibility_payload: dict[str, Any],
+    regression_payload: dict[str, Any],
+    policy_gate_payload: dict[str, Any],
+    submission_payload: dict[str, Any],
+    ensemble_output: dict[str, Any],
+) -> dict[str, Any]:
+    blocking_checks: list[str] = []
+    warnings: list[str] = []
+
+    if not artifact_contract_payload.get("pass", False):
+        blocking_checks.append("artifact_contract_failed")
+
+    reproducibility_status = str(reproducibility_payload.get("status", "skipped"))
+    if reproducibility_status == "failed":
+        blocking_checks.append("reproducibility_failed")
+    elif reproducibility_status == "skipped":
+        warnings.append("reproducibility_baseline_missing")
+
+    regression_status = str(regression_payload.get("status", "skipped"))
+    if regression_status == "failed":
+        blocking_checks.append("regression_gate_failed")
+    elif regression_status == "skipped":
+        warnings.append("regression_baseline_missing")
+
+    regression_warnings = regression_payload.get("warnings", [])
+    if isinstance(regression_warnings, list) and regression_warnings:
+        warnings.extend(f"regression:{item}" for item in regression_warnings)
+
+    submission_stage = str(submission_payload.get("stage", context.get("submission_stage", "none")))
+    submission_status = str(submission_payload.get("status", "skipped"))
+
+    if submission_stage == "none":
+        warnings.append("submission_not_requested")
+    elif submission_status != "passed":
+        blocking_checks.append("submission_not_ready")
+
+    ensemble_aggregate = ensemble_output.get("aggregate", {}) if isinstance(ensemble_output, dict) else {}
+    ensemble_decision = (
+        ensemble_aggregate.get("decision") if isinstance(ensemble_aggregate, dict) else None
+    )
+    if ensemble_decision is None:
+        warnings.append("ensemble_decision_unavailable")
+
+    if blocking_checks:
+        readiness_status = "blocked"
+        readiness_reason = "blocking_checks_failed"
+    elif warnings:
+        readiness_status = "caution"
+        readiness_reason = "non_blocking_warnings"
+    else:
+        readiness_status = "ready"
+        readiness_reason = None
+
+    return {
+        "run_id": context.get("run_id"),
+        "seed": context.get("seed"),
+        "generated_at": _now_utc_iso(),
+        "status": readiness_status,
+        "reason": readiness_reason,
+        "checks": {
+            "artifact_contract": {
+                "status": "passed" if artifact_contract_payload.get("pass", False) else "failed",
+                "missing_artifacts": artifact_contract_payload.get("missing_artifacts", []),
+            },
+            "reproducibility": {
+                "status": reproducibility_status,
+                "reason": reproducibility_payload.get("reason"),
+            },
+            "regression_gate": {
+                "status": regression_status,
+                "reason": regression_payload.get("reason"),
+                "blocking_failures": regression_payload.get("blocking_failures", []),
+                "warnings": regression_payload.get("warnings", []),
+            },
+            "policy_gate": {
+                "status": policy_gate_payload.get("regression_status"),
+                "aggregate_decision": policy_gate_payload.get("aggregate_decision"),
+                "warnings": policy_gate_payload.get("warnings", []),
+            },
+            "submission": {
+                "stage": submission_stage,
+                "status": submission_status,
+                "reason": submission_payload.get("reason"),
+                "validation_report_json": submission_payload.get("validation_report_json"),
+                "submission_csv": submission_payload.get("submission_csv"),
+            },
+            "ensemble": {
+                "decision": ensemble_decision,
+                "promoted_genders": (
+                    ensemble_aggregate.get("promoted_genders", [])
+                    if isinstance(ensemble_aggregate, dict)
+                    else []
+                ),
+            },
+        },
+        "blocking_checks": sorted(set(blocking_checks)),
+        "warnings": sorted(set(str(item) for item in warnings)),
+    }
 
 
 def _resolve_feature_path_for_gender(context: dict[str, Any], gender_key: str) -> Path:
@@ -1749,6 +2605,18 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
         "by_gender": calibration_policy_by_gender,
     }
 
+    train_module = _load_script_module("03_lgbm_train.py", "lgbm_train_ablation_stage")
+    train_module.DATA_DIR = str(PIPELINE_DIR / "artifacts" / "data")
+    train_module.OUT_DIR = str(PIPELINE_DIR / "artifacts" / "models")
+
+    ensemble_payload = _build_ensemble_report(
+        context=context,
+        train_result=train_result,
+        train_module=train_module,
+        feature_frames_by_gender=feature_frames_by_gender,
+        split_probabilities=split_probabilities,
+    )
+
     governance_module = _load_feature_governance_module()
     governance_rows = governance_module.build_governance_ledger_rows(
         genders_payload=genders_payload,
@@ -1773,10 +2641,6 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
 
     selected_groups = governance_module.select_suspicious_groups(governance_rows)
     group_gender_feature_map = governance_module.build_group_gender_feature_map(governance_rows)
-
-    train_module = _load_script_module("03_lgbm_train.py", "lgbm_train_ablation_stage")
-    train_module.DATA_DIR = str(PIPELINE_DIR / "artifacts" / "data")
-    train_module.OUT_DIR = str(PIPELINE_DIR / "artifacts" / "models")
 
     drop_columns = set(getattr(train_module, "DROP_COLUMNS", ("Season", "TeamA", "TeamB", "Target", "Split")))
     ablation_groups: list[dict[str, Any]] = []
@@ -1996,6 +2860,7 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
         "calibration": calibration_payload,
         "drift": drift_payload,
         "calibration_policy": calibration_policy_payload,
+        "ensemble": ensemble_payload,
         "governance": governance_payload,
         "governance_decision": governance_decision_payload,
     }
@@ -2008,6 +2873,7 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
         "calibration": calibration_payload,
         "drift": drift_payload,
         "calibration_policy": calibration_policy_payload,
+        "ensemble": ensemble_payload,
         "governance": governance_payload,
         "governance_decision": governance_decision_payload,
     }
@@ -2024,6 +2890,7 @@ def stage_artifact(context: dict[str, Any]) -> dict[str, Any]:
     calibration_policy_output = (
         eval_output.get("calibration_policy", {}) if isinstance(eval_output.get("calibration_policy", {}), dict) else {}
     )
+    ensemble_output = eval_output.get("ensemble", {}) if isinstance(eval_output.get("ensemble", {}), dict) else {}
     governance_output = eval_output.get("governance", {}) if isinstance(eval_output.get("governance", {}), dict) else {}
     governance_decision_output = (
         eval_output.get("governance_decision", {})
@@ -2043,6 +2910,7 @@ def stage_artifact(context: dict[str, Any]) -> dict[str, Any]:
         "calibration_report_json": calibration_output.get("report_json"),
         "drift_regime_report_json": drift_output.get("report_json"),
         "calibration_policy_report_json": calibration_policy_output.get("report_json"),
+        "ensemble_report_json": ensemble_output.get("report_json"),
         "governance_ledger_csv": governance_artifacts.get("ledger_csv"),
         "ablation_report_json": governance_artifacts.get("ablation_report_json"),
         "governance_decision_report_json": governance_decision_output.get("report_json"),
@@ -2143,6 +3011,48 @@ def stage_artifact(context: dict[str, Any]) -> dict[str, Any]:
     policy_gate_path = run_dir / "policy_gate_report.json"
     _write_json(policy_gate_path, policy_gate_payload)
 
+    pre_submission_blockers: list[str] = []
+    if missing_artifacts:
+        pre_submission_blockers.append("artifact_contract_failed")
+    if reproducibility_payload.get("status") == "failed":
+        pre_submission_blockers.append("reproducibility_failed")
+    if regression_payload.get("status") == "failed":
+        pre_submission_blockers.append("regression_gate_failed")
+
+    submission_error: Exception | None = None
+    submission_stage = str(context.get("submission_stage", "none"))
+    if pre_submission_blockers:
+        submission_payload = {
+            "status": "skipped",
+            "reason": "blocked_before_submission",
+            "stage": submission_stage,
+        }
+    else:
+        try:
+            submission_payload = _build_optional_submission(context)
+        except Exception as exc:
+            submission_error = exc
+            submission_payload = {
+                "status": "failed",
+                "reason": "submission_validation_failed",
+                "stage": submission_stage,
+                "validation_report_json": str(run_dir / "submission_validation_report.json"),
+                "submission_csv": None,
+                "error": str(exc),
+            }
+
+    readiness_payload = _evaluate_submission_readiness(
+        context=context,
+        artifact_contract_payload=artifact_contract_payload,
+        reproducibility_payload=reproducibility_payload,
+        regression_payload=regression_payload,
+        policy_gate_payload=policy_gate_payload,
+        submission_payload=submission_payload,
+        ensemble_output=ensemble_output,
+    )
+    readiness_path = run_dir / "submission_readiness_report.json"
+    _write_json(readiness_path, readiness_payload)
+
     if missing_artifacts:
         raise RuntimeError(
             "artifact contract failed: missing required artifacts -> " + ", ".join(sorted(missing_artifacts))
@@ -2160,7 +3070,8 @@ def stage_artifact(context: dict[str, Any]) -> dict[str, Any]:
             + json.dumps(regression_payload.get("blocking_failures", []), ensure_ascii=False)
         )
 
-    submission_payload = _build_optional_submission(context)
+    if submission_error is not None:
+        raise submission_error
 
     run_files = sorted(
         str(path.relative_to(run_dir))
@@ -2197,6 +3108,10 @@ def stage_artifact(context: dict[str, Any]) -> dict[str, Any]:
                 "report_json": submission_payload.get("validation_report_json"),
                 "submission_csv": submission_payload.get("submission_csv"),
             },
+            "readiness": {
+                "status": readiness_payload.get("status"),
+                "report_json": str(readiness_path),
+            },
         },
     }
 
@@ -2231,6 +3146,10 @@ def stage_artifact(context: dict[str, Any]) -> dict[str, Any]:
             "stage": submission_payload.get("stage"),
             "reason": submission_payload.get("reason"),
         },
+        "readiness": {
+            "status": readiness_payload.get("status"),
+            "report_json": str(readiness_path),
+        },
     }
 
 
@@ -2259,6 +3178,26 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="none",
         help="Optional submission output stage; 'none' disables submission generation",
     )
+    parser.add_argument(
+        "--training-profile",
+        type=str,
+        choices=("baseline", "quality_v1"),
+        default="baseline",
+        help="Train profile to use in canonical train stage",
+    )
+    parser.add_argument(
+        "--hpo-trials",
+        type=int,
+        default=0,
+        help="Optional deterministic HPO trial count (0 disables HPO harness)",
+    )
+    parser.add_argument(
+        "--hpo-target-profile",
+        type=str,
+        choices=HPO_ALLOWED_PROFILES,
+        default="quality_v1",
+        help="Target profile namespace for HPO candidate search",
+    )
     return parser.parse_args(argv)
 
 
@@ -2271,6 +3210,9 @@ def main(argv: list[str] | None = None) -> int:
         argv=argv,
     )
     context["submission_stage"] = args.submission_stage
+    context["training_profile"] = args.training_profile
+    context["hpo_trials"] = int(args.hpo_trials)
+    context["hpo_target_profile"] = args.hpo_target_profile
 
     run_dir = Path(context["run_dir"])
     run_dir.mkdir(parents=True, exist_ok=True)

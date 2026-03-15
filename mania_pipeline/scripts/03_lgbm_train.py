@@ -14,6 +14,27 @@ os.makedirs(OUT_DIR, exist_ok=True)
 CANONICAL_SPLITS = ("Train", "Val", "Test")
 DROP_COLUMNS = ("Season", "TeamA", "TeamB", "Target", "Split")
 
+TRAINING_PROFILES = {
+    "baseline": {
+        "learning_rate": 0.05,
+        "num_leaves": 31,
+        "max_depth": -1,
+        "min_child_samples": 20,
+        "colsample_bytree": 0.8,
+        "subsample": 0.8,
+        "n_estimators": 1000,
+    },
+    "quality_v1": {
+        "learning_rate": 0.03,
+        "num_leaves": 47,
+        "max_depth": -1,
+        "min_child_samples": 15,
+        "colsample_bytree": 0.9,
+        "subsample": 0.9,
+        "n_estimators": 1400,
+    },
+}
+
 
 # ─────────────────────────────────────────────────────────
 # YARDIMCI FONKSİYONLAR
@@ -82,10 +103,32 @@ def _compute_metrics_by_split(model, df, feature_columns):
     return metrics_by_split
 
 
+def resolve_training_params(*, profile: str, random_state: int, param_overrides: dict | None = None) -> dict:
+    profile_key = str(profile).strip().lower()
+    if profile_key not in TRAINING_PROFILES:
+        allowed = ", ".join(sorted(TRAINING_PROFILES.keys()))
+        raise ValueError(f"unknown training profile: {profile}. allowed={allowed}")
+
+    profile_params = dict(TRAINING_PROFILES[profile_key])
+    if isinstance(param_overrides, dict):
+        for key, value in param_overrides.items():
+            if key in profile_params and value is not None:
+                profile_params[key] = value
+
+    return {
+        "objective": "binary",
+        "metric": "binary_logloss",
+        "boosting_type": "gbdt",
+        "random_state": int(random_state),
+        "verbose": -1,
+        **profile_params,
+    }
+
+
 # ─────────────────────────────────────────────────────────
 # MODEL EĞİTİMİ (LIGHTGBM)
 # ─────────────────────────────────────────────────────────
-def train_baseline(df, gender="M", random_state=42):
+def train_baseline(df, gender="M", random_state=42, profile="baseline", param_overrides=None):
     tag = "Men" if gender == "M" else "Women"
     print(f"\n{'='*55}")
     print(f"  {tag.upper()} BASELINE MODEL EĞİTİMİ BAŞLIYOR")
@@ -107,27 +150,19 @@ def train_baseline(df, gender="M", random_state=42):
     # Hedef (Y) ve Modeli yanıltabilecek kimlik/metadata (X_drop) sütunları
     features = [c for c in df.columns if c not in DROP_COLUMNS]
 
+    training_profile = str(profile).strip().lower()
+    params = resolve_training_params(
+        profile=training_profile,
+        random_state=random_state,
+        param_overrides=param_overrides,
+    )
+
     print(f"Toplam özellik sayısı: {len(features)}")
+    print(f"Training profile: {training_profile}")
 
     # Veriyi hazırla
     X_train, y_train = train_df[features], train_df["Target"]
     X_val, y_val = val_df[features], val_df["Target"]
-
-    # LGBM Parametreleri (Daha sonra Optuna ile optimize edilecek, şimdilik sabit "iyi" değerler)
-    params = {
-        "objective": "binary",
-        "metric": "binary_logloss",  # Logloss üzerinden optimize edip olasılık çıkarıyoruz
-        "boosting_type": "gbdt",
-        "learning_rate": 0.05,
-        "num_leaves": 31,
-        "max_depth": -1,
-        "min_child_samples": 20,
-        "colsample_bytree": 0.8,
-        "subsample": 0.8,
-        "random_state": random_state,
-        "n_estimators": 1000,
-        "verbose": -1,
-    }
 
     print("\nModel eğitiliyor (Early Stopping = 50)...")
     model = lgb.LGBMClassifier(**params)
@@ -190,6 +225,20 @@ def train_baseline(df, gender="M", random_state=42):
 
     payload = {
         "gender": gender,
+        "training_profile": training_profile,
+        "training_params": {
+            key: params[key]
+            for key in (
+                "learning_rate",
+                "num_leaves",
+                "max_depth",
+                "min_child_samples",
+                "colsample_bytree",
+                "subsample",
+                "n_estimators",
+                "random_state",
+            )
+        },
         "metrics_by_split": metrics_by_split,
         "feature_snapshot": {
             "feature_columns": features,

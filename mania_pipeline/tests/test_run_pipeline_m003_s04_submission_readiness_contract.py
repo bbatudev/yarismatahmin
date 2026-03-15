@@ -2,6 +2,7 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 
@@ -9,7 +10,7 @@ SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "run_pipeline.py
 
 
 def _load_module():
-    spec = importlib.util.spec_from_file_location("run_pipeline_under_test_s06", SCRIPT_PATH)
+    spec = importlib.util.spec_from_file_location("run_pipeline_under_test_m003_s04", SCRIPT_PATH)
     assert spec and spec.loader, f"Could not load module spec from {SCRIPT_PATH}"
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -47,7 +48,7 @@ def _calibration_summary(ece: float, wmae: float, high_gap: float) -> dict:
             "threshold": 0.8,
             "sample_count": 20,
             "pred_mean": 0.87,
-            "actual_rate": 0.81,
+            "actual_rate": 0.82,
             "gap": high_gap,
             "reason": None,
         },
@@ -55,7 +56,18 @@ def _calibration_summary(ece: float, wmae: float, high_gap: float) -> dict:
     return {"Train": split_payload, "Val": split_payload, "Test": split_payload}
 
 
-def _build_context(tmp_path: Path, *, run_id: str, seed: int, git_commit: str, men_brier: float, women_brier: float, men_ece: float, women_ece: float) -> dict:
+def _build_context(
+    tmp_path: Path,
+    *,
+    run_id: str,
+    seed: int,
+    git_commit: str,
+    submission_stage: str,
+    men_brier: float,
+    women_brier: float,
+    men_ece: float,
+    women_ece: float,
+) -> dict:
     artifacts_root = tmp_path / "runs"
     run_dir = artifacts_root / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -143,8 +155,26 @@ def _build_context(tmp_path: Path, *, run_id: str, seed: int, git_commit: str, m
             "governance_decision": {
                 "report_json": str(governance_decision_report),
                 "by_gender": {
-                    "men": {"decision": "hold_baseline", "confidence": 0.5, "reason_codes": []},
-                    "women": {"decision": "hold_baseline", "confidence": 0.5, "reason_codes": []},
+                    "men": {
+                        "decision": "hold_baseline",
+                        "confidence": 0.50,
+                        "reason_codes": [],
+                        "evidence_bundle": {
+                            "calibration_policy": {
+                                "test_brier_improvement_vs_none": 0.0,
+                            }
+                        },
+                    },
+                    "women": {
+                        "decision": "hold_baseline",
+                        "confidence": 0.50,
+                        "reason_codes": [],
+                        "evidence_bundle": {
+                            "calibration_policy": {
+                                "test_brier_improvement_vs_none": 0.0,
+                            }
+                        },
+                    },
                 },
                 "aggregate": {"decision": "hold_baseline", "reason_codes": []},
             },
@@ -155,6 +185,7 @@ def _build_context(tmp_path: Path, *, run_id: str, seed: int, git_commit: str, m
         "run_id": run_id,
         "seed": seed,
         "git_commit": git_commit,
+        "submission_stage": submission_stage,
         "artifacts_root": str(artifacts_root),
         "run_dir": str(run_dir),
         "metadata_path": str(metadata_path),
@@ -163,106 +194,118 @@ def _build_context(tmp_path: Path, *, run_id: str, seed: int, git_commit: str, m
     }
 
 
-def _write_baseline_run(tmp_path: Path, *, run_id: str, seed: int, git_commit: str, men_brier: float, women_brier: float, men_ece: float, women_ece: float):
-    context = _build_context(
-        tmp_path,
-        run_id=run_id,
-        seed=seed,
-        git_commit=git_commit,
-        men_brier=men_brier,
-        women_brier=women_brier,
-        men_ece=men_ece,
-        women_ece=women_ece,
-    )
-
+def _write_baseline_metadata(context: dict):
     baseline_metadata = {
-        "run_id": run_id,
+        "run_id": context["run_id"],
         "status": "succeeded",
-        "seed": seed,
-        "git_commit": git_commit,
+        "seed": context["seed"],
+        "git_commit": context["git_commit"],
         "stage_outputs": context["stage_outputs"],
     }
     _write_json(Path(context["run_dir"]) / "run_metadata.json", baseline_metadata)
 
 
-def test_stage_artifact_writes_contract_reports_with_skip_without_baseline(tmp_path):
+def test_stage_artifact_emits_caution_readiness_when_submission_not_requested(tmp_path):
     module = _load_module()
+
     context = _build_context(
         tmp_path,
-        run_id="20260315T000100Z_s06_current",
+        run_id="20260315T040100Z_m003_s04_caution",
         seed=42,
         git_commit="abc123",
+        submission_stage="none",
         men_brier=0.18,
         women_brier=0.16,
-        men_ece=0.03,
-        women_ece=0.04,
-    )
-
-    result = module.stage_artifact(context)
-
-    assert Path(result["manifest"]).exists()
-    assert result["artifact_contract"]["status"] == "passed"
-    assert result["reproducibility"]["status"] == "skipped"
-    assert result["regression_gate"]["status"] == "skipped"
-
-    manifest = json.loads(Path(result["manifest"]).read_text(encoding="utf-8"))
-    assert manifest["contracts"]["artifact_contract"]["status"] == "passed"
-    assert manifest["contracts"]["reproducibility"]["status"] == "skipped"
-
-
-def test_stage_artifact_fails_when_reproducibility_tolerance_breaches(tmp_path):
-    module = _load_module()
-
-    _write_baseline_run(
-        tmp_path,
-        run_id="20260315T000000Z_s06_baseline",
-        seed=42,
-        git_commit="abc123",
-        men_brier=0.10,
-        women_brier=0.10,
-        men_ece=0.02,
-        women_ece=0.02,
-    )
-
-    context = _build_context(
-        tmp_path,
-        run_id="20260315T000100Z_s06_current",
-        seed=42,
-        git_commit="abc123",
-        men_brier=0.30,
-        women_brier=0.30,
         men_ece=0.03,
         women_ece=0.03,
     )
 
-    with pytest.raises(RuntimeError, match="reproducibility gate failed"):
-        module.stage_artifact(context)
+    result = module.stage_artifact(context)
+    readiness_path = Path(result["readiness"]["report_json"])
+    assert readiness_path.exists()
+
+    readiness = json.loads(readiness_path.read_text(encoding="utf-8"))
+    assert readiness["status"] == "caution"
+    assert "submission_not_requested" in readiness["warnings"]
 
 
-def test_stage_artifact_fails_when_regression_gate_detects_calibration_degradation(tmp_path):
+def test_stage_artifact_writes_readiness_blocked_before_raising_regression_failure(tmp_path):
     module = _load_module()
 
-    _write_baseline_run(
+    baseline_context = _build_context(
         tmp_path,
-        run_id="20260315T000000Z_s06_baseline",
-        seed=11,
-        git_commit="older",
+        run_id="20260315T040000Z_m003_s04_baseline_blocked",
+        seed=42,
+        git_commit="abc123",
+        submission_stage="none",
         men_brier=0.18,
         women_brier=0.16,
         men_ece=0.02,
         women_ece=0.02,
     )
+    _write_baseline_metadata(baseline_context)
 
-    context = _build_context(
+    current_context = _build_context(
         tmp_path,
-        run_id="20260315T000100Z_s06_current",
+        run_id="20260315T040300Z_m003_s04_blocked",
         seed=42,
         git_commit="newer",
+        submission_stage="none",
         men_brier=0.18,
-        women_brier=0.16,
-        men_ece=0.05,
+        women_brier=0.20,
+        men_ece=0.02,
         women_ece=0.06,
     )
 
     with pytest.raises(RuntimeError, match="regression gate failed"):
-        module.stage_artifact(context)
+        module.stage_artifact(current_context)
+
+    readiness_path = Path(current_context["run_dir"]) / "submission_readiness_report.json"
+    assert readiness_path.exists()
+    readiness = json.loads(readiness_path.read_text(encoding="utf-8"))
+    assert readiness["status"] == "blocked"
+    assert "regression_gate_failed" in readiness["blocking_checks"]
+
+
+def test_stage_artifact_emits_ready_readiness_when_submission_and_gates_pass(tmp_path, monkeypatch):
+    module = _load_module()
+
+    baseline_context = _build_context(
+        tmp_path,
+        run_id="20260315T040000Z_m003_s04_baseline",
+        seed=42,
+        git_commit="abc123",
+        submission_stage="none",
+        men_brier=0.18,
+        women_brier=0.16,
+        men_ece=0.03,
+        women_ece=0.03,
+    )
+    _write_baseline_metadata(baseline_context)
+
+    sample_dir = tmp_path / "kaggle"
+    sample_dir.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame({"ID": ["2026_1101_1102", "2026_1103_1104"], "Pred": [0.5, 0.5]}).to_csv(
+        sample_dir / "SampleSubmissionStage2.csv", index=False
+    )
+    monkeypatch.setattr(module, "KAGGLE_DATA_DIR", sample_dir, raising=False)
+
+    current_context = _build_context(
+        tmp_path,
+        run_id="20260315T040200Z_m003_s04_ready",
+        seed=42,
+        git_commit="abc123",
+        submission_stage="stage2",
+        men_brier=0.18,
+        women_brier=0.16,
+        men_ece=0.03,
+        women_ece=0.03,
+    )
+
+    result = module.stage_artifact(current_context)
+    readiness = json.loads(Path(result["readiness"]["report_json"]).read_text(encoding="utf-8"))
+
+    assert readiness["status"] == "ready"
+    assert readiness["blocking_checks"] == []
+    assert readiness["checks"]["submission"]["status"] == "passed"
+    assert result["submission"]["status"] == "passed"
