@@ -1,0 +1,45 @@
+{
+  "run_id": "20260314T142603Z_s01_smoke",
+  "seed": 42,
+  "git_commit": "1b98eeb",
+  "started_at": "2026-03-14T14:26:03.329792Z",
+  "command": "run_pipeline.py --seed 42 --run-label s01_smoke",
+  "cwd": "C:\\Users\\Gaming\\Desktop\\projects\\yarismatahmin",
+  "run_label": "s01_smoke",
+  "artifacts_root": "C:\\Users\\Gaming\\Desktop\\projects\\yarismatahmin\\mania_pipeline\\artifacts\\runs",
+  "run_dir": "C:\\Users\\Gaming\\Desktop\\projects\\yarismatahmin\\mania_pipeline\\artifacts\\runs\\20260314T142603Z_s01_smoke",
+  "status": "succeeded",
+  "finished_at": "2026-03-14T14:26:46.184427Z",
+  "duration_ms": 42841,
+  "failed_stage": null,
+  "error": null,
+  "stage_outputs": {
+    "feature": {
+      "outputs": {
+        "men_features": "C:\\Users\\Gaming\\Desktop\\projects\\yarismatahmin\\mania_pipeline\\artifacts\\data\\processed_features_men.csv",
+        "women_features": "C:\\Users\\Gaming\\Desktop\\projects\\yarismatahmin\\mania_pipeline\\artifacts\\data\\processed_features_women.csv"
+      },
+      "rows": {
+        "men": 2898,
+        "women": 1922
+      }
+    },
+    "train": {
+      "models": {
+        "men": "C:\\Users\\Gaming\\Desktop\\projects\\yarismatahmin\\mania_pipeline\\artifacts\\models\\lgbm_baseline_men_20260314T142603Z_s01_smoke.pkl",
+        "women": "C:\\Users\\Gaming\\Desktop\\projects\\yarismatahmin\\mania_pipeline\\artifacts\\models\\lgbm_baseline_women_20260314T142603Z_s01_smoke.pkl"
+      },
+      "metrics": {
+        "men_test_brier": 0.18175050076078456,
+        "women_test_brier": 0.14223205049047852
+      }
+    },
+    "eval_report": {
+      "eval_report": "C:\\Users\\Gaming\\Desktop\\projects\\yarismatahmin\\mania_pipeline\\artifacts\\runs\\20260314T142603Z_s01_smoke\\eval_report.json"
+    },
+    "artifact": {
+      "manifest": "C:\\Users\\Gaming\\Desktop\\projects\\yarismatahmin\\mania_pipeline\\artifacts\\runs\\20260314T142603Z_s01_smoke\\artifact_manifest.json",
+      "file_count": 4
+    }
+  }
+}

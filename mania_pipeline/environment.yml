@@ -12,6 +12,7 @@ dependencies:
   - matplotlib
   - tqdm
   - seaborn
+  - pytest
   - pip
   - pip:
       - kaggle

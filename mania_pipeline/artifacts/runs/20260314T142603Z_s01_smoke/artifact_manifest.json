@@ -1,0 +1,36 @@
+{
+  "run_id": "20260314T142603Z_s01_smoke",
+  "generated_at": "2026-03-14T14:26:46.182363Z",
+  "run_dir": "C:\\Users\\Gaming\\Desktop\\projects\\yarismatahmin\\mania_pipeline\\artifacts\\runs\\20260314T142603Z_s01_smoke",
+  "file_count": 3,
+  "files": [
+    "eval_report.json",
+    "run_metadata.json",
+    "stage_events.jsonl"
+  ],
+  "stage_outputs": {
+    "feature": {
+      "outputs": {
+        "men_features": "C:\\Users\\Gaming\\Desktop\\projects\\yarismatahmin\\mania_pipeline\\artifacts\\data\\processed_features_men.csv",
+        "women_features": "C:\\Users\\Gaming\\Desktop\\projects\\yarismatahmin\\mania_pipeline\\artifacts\\data\\processed_features_women.csv"
+      },
+      "rows": {
+        "men": 2898,
+        "women": 1922
+      }
+    },
+    "train": {
+      "models": {
+        "men": "C:\\Users\\Gaming\\Desktop\\projects\\yarismatahmin\\mania_pipeline\\artifacts\\models\\lgbm_baseline_men_20260314T142603Z_s01_smoke.pkl",
+        "women": "C:\\Users\\Gaming\\Desktop\\projects\\yarismatahmin\\mania_pipeline\\artifacts\\models\\lgbm_baseline_women_20260314T142603Z_s01_smoke.pkl"
+      },
+      "metrics": {
+        "men_test_brier": 0.18175050076078456,
+        "women_test_brier": 0.14223205049047852
+      }
+    },
+    "eval_report": {
+      "eval_report": "C:\\Users\\Gaming\\Desktop\\projects\\yarismatahmin\\mania_pipeline\\artifacts\\runs\\20260314T142603Z_s01_smoke\\eval_report.json"
+    }
+  }
+}

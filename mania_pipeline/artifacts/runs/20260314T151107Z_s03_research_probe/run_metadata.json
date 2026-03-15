@@ -1,0 +1,115 @@
+{
+  "run_id": "20260314T151107Z_s03_research_probe",
+  "seed": 42,
+  "git_commit": "ba8e013",
+  "started_at": "2026-03-14T15:11:07.594974Z",
+  "command": "run_pipeline.py --seed 42 --run-label s03_research_probe",
+  "cwd": "C:\\Users\\Gaming\\Desktop\\projects\\yarismatahmin",
+  "run_label": "s03_research_probe",
+  "artifacts_root": "C:\\Users\\Gaming\\Desktop\\projects\\yarismatahmin\\mania_pipeline\\artifacts\\runs",
+  "run_dir": "C:\\Users\\Gaming\\Desktop\\projects\\yarismatahmin\\mania_pipeline\\artifacts\\runs\\20260314T151107Z_s03_research_probe",
+  "status": "succeeded",
+  "finished_at": "2026-03-14T15:11:50.628049Z",
+  "duration_ms": 43019,
+  "failed_stage": null,
+  "error": null,
+  "stage_outputs": {
+    "feature": {
+      "outputs": {
+        "men_features": "C:\\Users\\Gaming\\Desktop\\projects\\yarismatahmin\\mania_pipeline\\artifacts\\data\\processed_features_men.csv",
+        "women_features": "C:\\Users\\Gaming\\Desktop\\projects\\yarismatahmin\\mania_pipeline\\artifacts\\data\\processed_features_women.csv"
+      },
+      "rows": {
+        "men": 2898,
+        "women": 1922
+      },
+      "gates": {
+        "men": {
+          "pass": true,
+          "blocking_rule": null,
+          "reason": "Split and leakage contracts satisfied.",
+          "evidence": {
+            "split": {
+              "pass": true,
+              "blocking_rule": null,
+              "reason": "Split contract satisfied.",
+              "evidence": {
+                "row_count": 2898,
+                "split_counts": {
+                  "Test": 268,
+                  "Train": 2496,
+                  "Val": 134
+                },
+                "allowed_labels": [
+                  "Test",
+                  "Train",
+                  "Val"
+                ]
+              }
+            },
+            "leakage": {
+              "pass": true,
+              "blocking_rule": null,
+              "reason": "Leakage contract satisfied.",
+              "evidence": {
+                "row_count": 2898,
+                "feature_column_count": 57
+              }
+            }
+          }
+        },
+        "women": {
+          "pass": true,
+          "blocking_rule": null,
+          "reason": "Split and leakage contracts satisfied.",
+          "evidence": {
+            "split": {
+              "pass": true,
+              "blocking_rule": null,
+              "reason": "Split contract satisfied.",
+              "evidence": {
+                "row_count": 1922,
+                "split_counts": {
+                  "Test": 268,
+                  "Train": 1520,
+                  "Val": 134
+                },
+                "allowed_labels": [
+                  "Test",
+                  "Train",
+                  "Val"
+                ]
+              }
+            },
+            "leakage": {
+              "pass": true,
+              "blocking_rule": null,
+              "reason": "Leakage contract satisfied.",
+              "evidence": {
+                "row_count": 1922,
+                "feature_column_count": 52
+              }
+            }
+          }
+        }
+      }
+    },
+    "train": {
+      "models": {
+        "men": "C:\\Users\\Gaming\\Desktop\\projects\\yarismatahmin\\mania_pipeline\\artifacts\\models\\lgbm_baseline_men_20260314T151107Z_s03_research_probe.pkl",
+        "women": "C:\\Users\\Gaming\\Desktop\\projects\\yarismatahmin\\mania_pipeline\\artifacts\\models\\lgbm_baseline_women_20260314T151107Z_s03_research_probe.pkl"
+      },
+      "metrics": {
+        "men_test_brier": 0.18175050076078456,
+        "women_test_brier": 0.14223205049047852
+      }
+    },
+    "eval_report": {
+      "eval_report": "C:\\Users\\Gaming\\Desktop\\projects\\yarismatahmin\\mania_pipeline\\artifacts\\runs\\20260314T151107Z_s03_research_probe\\eval_report.json"
+    },
+    "artifact": {
+      "manifest": "C:\\Users\\Gaming\\Desktop\\projects\\yarismatahmin\\mania_pipeline\\artifacts\\runs\\20260314T151107Z_s03_research_probe\\artifact_manifest.json",
+      "file_count": 4
+    }
+  }
+}

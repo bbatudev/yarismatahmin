@@ -41,12 +41,20 @@ conda activate march_mania
 
 ## 🚀 Pipeline
 ```bash
-# Feature Engineering
-python mania_pipeline/scripts/02_feature_engineering.py
+# Canonical end-to-end run (feature -> train -> eval_report -> artifact)
+python mania_pipeline/scripts/run_pipeline.py --seed 42 --run-label local_smoke
 
-# Model Training (yakında)
+# Legacy stage-by-stage commands
+python mania_pipeline/scripts/02_feature_engineering.py
 python mania_pipeline/scripts/03_lgbm_train.py
 ```
+
+Run-scoped artifacts are written under:
+
+- `mania_pipeline/artifacts/runs/<run_id>/run_metadata.json`
+- `mania_pipeline/artifacts/runs/<run_id>/stage_events.jsonl`
+- `mania_pipeline/artifacts/runs/<run_id>/eval_report.json`
+- `mania_pipeline/artifacts/runs/<run_id>/artifact_manifest.json`
 
 ## 📊 Veri Seti
 

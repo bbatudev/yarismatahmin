@@ -1,0 +1,115 @@
+{
+  "run_id": "20260314T161222Z_s04_calibration_smoke",
+  "seed": 42,
+  "generated_at": "2026-03-14T16:13:10.245489Z",
+  "bin_edges": [
+    0.0,
+    0.1,
+    0.2,
+    0.3,
+    0.4,
+    0.5,
+    0.6,
+    0.7,
+    0.8,
+    0.9,
+    1.0
+  ],
+  "high_prob_threshold": 0.8,
+  "calibration_summary": {
+    "men": {
+      "Train": {
+        "sample_count": 2496,
+        "non_empty_bins": 10,
+        "ece": 0.14885862131857253,
+        "wmae": 0.14885862131857253,
+        "reason": null,
+        "high_prob_band": {
+          "threshold": 0.8,
+          "sample_count": 359,
+          "pred_mean": 0.8747223368617151,
+          "actual_rate": 0.9888579387186629,
+          "gap": -0.11413560185694782,
+          "reason": null
+        }
+      },
+      "Val": {
+        "sample_count": 134,
+        "non_empty_bins": 10,
+        "ece": 0.06550790938844468,
+        "wmae": 0.06550790938844468,
+        "reason": null,
+        "high_prob_band": {
+          "threshold": 0.8,
+          "sample_count": 18,
+          "pred_mean": 0.8686071113563577,
+          "actual_rate": 0.8333333333333334,
+          "gap": 0.03527377802302434,
+          "reason": null
+        }
+      },
+      "Test": {
+        "sample_count": 268,
+        "non_empty_bins": 10,
+        "ece": 0.03666216310882713,
+        "wmae": 0.03666216310882713,
+        "reason": null,
+        "high_prob_band": {
+          "threshold": 0.8,
+          "sample_count": 35,
+          "pred_mean": 0.8758986982476453,
+          "actual_rate": 0.9142857142857143,
+          "gap": -0.03838701603806893,
+          "reason": null
+        }
+      }
+    },
+    "women": {
+      "Train": {
+        "sample_count": 1520,
+        "non_empty_bins": 8,
+        "ece": 0.16825553550717318,
+        "wmae": 0.16825553550717318,
+        "reason": null,
+        "high_prob_band": {
+          "threshold": 0.8,
+          "sample_count": 317,
+          "pred_mean": 0.863158842131862,
+          "actual_rate": 0.9873817034700315,
+          "gap": -0.12422286133816951,
+          "reason": null
+        }
+      },
+      "Val": {
+        "sample_count": 134,
+        "non_empty_bins": 8,
+        "ece": 0.07195276002543718,
+        "wmae": 0.07195276002543718,
+        "reason": null,
+        "high_prob_band": {
+          "threshold": 0.8,
+          "sample_count": 22,
+          "pred_mean": 0.8663141334090297,
+          "actual_rate": 0.9545454545454546,
+          "gap": -0.08823132113642485,
+          "reason": null
+        }
+      },
+      "Test": {
+        "sample_count": 268,
+        "non_empty_bins": 8,
+        "ece": 0.07932069009529348,
+        "wmae": 0.07932069009529348,
+        "reason": null,
+        "high_prob_band": {
+          "threshold": 0.8,
+          "sample_count": 44,
+          "pred_mean": 0.8636836976300131,
+          "actual_rate": 0.9772727272727273,
+          "gap": -0.11358902964271422,
+          "reason": null
+        }
+      }
+    }
+  }
+}
