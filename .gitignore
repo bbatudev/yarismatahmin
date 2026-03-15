@@ -78,6 +78,7 @@ data/processed_features.csv
 mania_pipeline/artifacts/models/
 mania_pipeline/artifacts/runs/
 mania_pipeline/artifacts/runs_m003/
+mania_pipeline/artifacts/runs_m004/
 Thumbs.db
 *.swp
 *.swo

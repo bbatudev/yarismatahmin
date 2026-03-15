@@ -1,0 +1,50 @@
+{
+  "baseline_run_id": "20260314T233549Z_m003_s04_readiness_base",
+  "candidate_run_id": "20260314T233640Z_m003_s04_readiness_gate",
+  "by_gender": {
+    "men": {
+      "baseline": {
+        "brier": 0.18175050076078456,
+        "logloss": 0.5381222738302219,
+        "auc": 0.8022388059701493
+      },
+      "candidate": {
+        "brier": 0.18175050076078456,
+        "logloss": 0.5381222738302219,
+        "auc": 0.8022388059701493
+      },
+      "delta": {
+        "brier": 0.0,
+        "logloss": 0.0,
+        "auc": 0.0
+      }
+    },
+    "women": {
+      "baseline": {
+        "brier": 0.14223205049047852,
+        "logloss": 0.44633879320997155,
+        "auc": 0.8927378035197148
+      },
+      "candidate": {
+        "brier": 0.14223205049047852,
+        "logloss": 0.44633879320997155,
+        "auc": 0.8927378035197148
+      },
+      "delta": {
+        "brier": 0.0,
+        "logloss": 0.0,
+        "auc": 0.0
+      }
+    }
+  },
+  "aux": {
+    "baseline": {
+      "ensemble_decision": "hold_baseline",
+      "readiness_status": "caution"
+    },
+    "candidate": {
+      "ensemble_decision": "hold_baseline",
+      "readiness_status": "ready"
+    }
+  }
+}

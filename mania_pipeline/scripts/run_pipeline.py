@@ -61,6 +61,10 @@ HPO_PARAM_SPACE = {
     "subsample": [0.7, 0.8, 0.9, 1.0],
     "n_estimators": [800, 1000, 1200, 1400],
 }
+HPO_CV_VAL_SEASONS = (2022, 2023)
+HPO_CV_MIN_TRAIN_ROWS = 2
+HPO_CV_MIN_VAL_ROWS = 2
+HPO_OBJECTIVE_GAP_PENALTY = 0.10
 ENSEMBLE_WEIGHT_GRID = (0.25, 0.5, 0.75)
 ENSEMBLE_MIN_VAL_IMPROVEMENT = 1e-4
 
@@ -412,6 +416,83 @@ def _build_hpo_trial_param_overrides(*, seed: int, trials: int) -> list[dict[str
     return candidates
 
 
+def _evaluate_hpo_cv_objective(
+    *,
+    train_module: Any,
+    df: pd.DataFrame,
+    gender_label: str,
+    base_seed: int,
+    target_profile: str,
+    param_overrides: dict[str, Any],
+) -> tuple[float | None, list[dict[str, Any]], str | None]:
+    if "Season" not in df.columns:
+        return None, [], "season_column_missing"
+
+    season_series = pd.to_numeric(df["Season"], errors="coerce")
+    if season_series.isna().all():
+        return None, [], "season_column_non_numeric"
+
+    cv_rows: list[dict[str, Any]] = []
+    fold_scores: list[float] = []
+
+    for fold_index, val_season in enumerate(HPO_CV_VAL_SEASONS, start=1):
+        train_mask = season_series < float(val_season)
+        val_mask = season_series == float(val_season)
+        train_count = int(train_mask.sum())
+        val_count = int(val_mask.sum())
+
+        row: dict[str, Any] = {
+            "fold_id": fold_index,
+            "val_season": int(val_season),
+            "train_rows": train_count,
+            "val_rows": val_count,
+            "status": "skipped",
+            "reason": None,
+            "val_brier": None,
+        }
+
+        if train_count < HPO_CV_MIN_TRAIN_ROWS or val_count < HPO_CV_MIN_VAL_ROWS:
+            row["reason"] = "insufficient_fold_rows"
+            cv_rows.append(row)
+            continue
+
+        fold_df = df.copy()
+        fold_df["Split"] = np.where(train_mask, "Train", np.where(val_mask, "Val", "Test"))
+
+        try:
+            _, fold_payload = _train_with_optional_profile(
+                train_module=train_module,
+                df=fold_df,
+                gender_label=gender_label,
+                random_state=int(base_seed) + fold_index,
+                profile=target_profile,
+                param_overrides=param_overrides,
+            )
+        except Exception as exc:
+            row["reason"] = f"fold_train_failed:{exc.__class__.__name__}"
+            cv_rows.append(row)
+            continue
+
+        fold_metrics = fold_payload.get("metrics_by_split", {}) if isinstance(fold_payload, dict) else {}
+        val_metrics = fold_metrics.get("Val", {}) if isinstance(fold_metrics, dict) else {}
+        fold_val_brier = _as_float_or_none(val_metrics.get("brier"))
+
+        if fold_val_brier is None:
+            row["reason"] = "missing_val_brier"
+            cv_rows.append(row)
+            continue
+
+        row["status"] = "passed"
+        row["val_brier"] = fold_val_brier
+        fold_scores.append(fold_val_brier)
+        cv_rows.append(row)
+
+    if not fold_scores:
+        return None, cv_rows, "no_successful_cv_folds"
+
+    return float(np.mean(fold_scores)), cv_rows, None
+
+
 def _run_hpo_search_for_gender(
     *,
     train_module: Any,
@@ -463,19 +544,66 @@ def _run_hpo_search_for_gender(
             continue
 
         metrics_by_split = payload.get("metrics_by_split", {}) if isinstance(payload, dict) else {}
+        train_metrics = metrics_by_split.get("Train", {}) if isinstance(metrics_by_split, dict) else {}
         val_metrics = metrics_by_split.get("Val", {}) if isinstance(metrics_by_split, dict) else {}
         test_metrics = metrics_by_split.get("Test", {}) if isinstance(metrics_by_split, dict) else {}
+
+        train_brier = _as_float_or_none(train_metrics.get("brier"))
         val_brier = _as_float_or_none(val_metrics.get("brier"))
+        test_brier = _as_float_or_none(test_metrics.get("brier"))
+        generalization_gap = (
+            float(val_brier - train_brier)
+            if isinstance(val_brier, (int, float)) and isinstance(train_brier, (int, float))
+            else None
+        )
+
+        cv_mean_val_brier, cv_rows, cv_reason = _evaluate_hpo_cv_objective(
+            train_module=train_module,
+            df=df,
+            gender_label=gender_label,
+            base_seed=trial_seed,
+            target_profile=target_profile,
+            param_overrides=overrides,
+        )
+
+        objective_score: float | None
+        objective_reason: str | None
+        if isinstance(cv_mean_val_brier, (int, float)):
+            objective_score = float(cv_mean_val_brier)
+            objective_reason = "cv_mean_val_brier"
+        elif isinstance(val_brier, (int, float)):
+            gap_penalty = (
+                abs(float(generalization_gap)) * HPO_OBJECTIVE_GAP_PENALTY
+                if isinstance(generalization_gap, (int, float))
+                else 0.0
+            )
+            objective_score = float(val_brier + gap_penalty)
+            objective_reason = "val_brier_plus_gap_penalty"
+        else:
+            objective_score = None
+            objective_reason = cv_reason or "missing_val_brier"
 
         candidate_payload.update(
             {
-                "status": "passed" if val_brier is not None else "failed",
-                "reason": None if val_brier is not None else "missing_val_brier",
+                "status": "passed"
+                if isinstance(val_brier, (int, float)) and isinstance(objective_score, (int, float))
+                else "failed",
+                "reason": None if isinstance(objective_score, (int, float)) else "missing_objective_score",
                 "metrics": {
+                    "train_brier": train_brier,
                     "val_brier": val_brier,
                     "val_logloss": _as_float_or_none(val_metrics.get("logloss")),
                     "val_auc": _as_float_or_none(val_metrics.get("auc")),
-                    "test_brier": _as_float_or_none(test_metrics.get("brier")),
+                    "test_brier": test_brier,
+                    "generalization_gap": generalization_gap,
+                    "cv_mean_val_brier": cv_mean_val_brier,
+                    "objective_score": objective_score,
+                    "objective_reason": objective_reason,
+                },
+                "cv": {
+                    "status": "passed" if cv_mean_val_brier is not None else "fallback",
+                    "reason": cv_reason,
+                    "rows": cv_rows,
                 },
             }
         )
@@ -493,12 +621,18 @@ def _run_hpo_search_for_gender(
             "trials_executed": 0,
             "best_trial_id": None,
             "best_val_brier": None,
+            "best_test_brier": None,
+            "best_objective_score": None,
+            "best_cv_mean_val_brier": None,
             "candidates": candidates,
         }
 
     best = min(
         successful,
         key=lambda candidate: (
+            candidate.get("metrics", {}).get("objective_score")
+            if isinstance(candidate.get("metrics", {}).get("objective_score"), (int, float))
+            else float("inf"),
             candidate.get("metrics", {}).get("val_brier")
             if isinstance(candidate.get("metrics", {}).get("val_brier"), (int, float))
             else float("inf"),
@@ -515,6 +649,8 @@ def _run_hpo_search_for_gender(
         "best_trial_id": int(best.get("trial_id", 0)),
         "best_val_brier": best.get("metrics", {}).get("val_brier"),
         "best_test_brier": best.get("metrics", {}).get("test_brier"),
+        "best_objective_score": best.get("metrics", {}).get("objective_score"),
+        "best_cv_mean_val_brier": best.get("metrics", {}).get("cv_mean_val_brier"),
         "best_param_overrides": best.get("param_overrides", {}),
         "candidates": candidates,
     }
@@ -639,6 +775,8 @@ def stage_train(context: dict[str, Any]) -> dict[str, Any]:
                 "best_trial_id": payload.get("best_trial_id"),
                 "best_val_brier": payload.get("best_val_brier"),
                 "best_test_brier": payload.get("best_test_brier"),
+                "best_objective_score": payload.get("best_objective_score"),
+                "best_cv_mean_val_brier": payload.get("best_cv_mean_val_brier"),
                 "best_param_overrides": payload.get("best_param_overrides"),
             }
             for gender_key, payload in hpo_by_gender.items()

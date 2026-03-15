@@ -4,7 +4,7 @@ Bu planın amacı: model kalitesini güvenli şekilde artırmak ve artışı kan
 
 ## Adım 0 — Mevcut başarı ölçütünü test et (Tamamlandı)
 
-- [x] Testleri çalıştır (`55 passed`)
+- [x] Testleri çalıştır (`57 passed`)
 - [x] Güncel baseline metriklerini kaydet
 - [x] Readiness durumunu doğrula (`ready`)
 
@@ -12,11 +12,11 @@ Detay: `M004-BASELINE-STATUS.md`
 
 ---
 
-## Adım 1 — HPO değerlendirmesini güçlendir
+## Adım 1 — HPO değerlendirmesini güçlendir (Tamamlandı)
 
-- [ ] Val tek split yerine daha sağlam bir değerlendirme düzeni kur
-- [ ] Parametre seçimini daha stabil hale getir
-- [ ] Güncel `hpo_report` ile adayları tekrar değerlendir
+- [x] Val tek split yerine daha sağlam bir değerlendirme düzeni kur
+- [x] Parametre seçimini daha stabil hale getir
+- [x] Güncel `hpo_report` ile adayları tekrar değerlendir
 
 Çıktı: daha güvenilir HPO seçim kararı
 
