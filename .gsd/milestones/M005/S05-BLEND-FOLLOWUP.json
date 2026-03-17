@@ -1,0 +1,65 @@
+{
+  "milestone_id": "M005",
+  "step_id": "S05",
+  "title": "Alternative Model Blend Follow-Up",
+  "status": "completed_with_gender_split_outcome",
+  "completed_at": "2026-03-16",
+  "authoritative_runs": [
+    {
+      "run_id": "20260316T182859Z_m005_s05_blend_gate_smoke_v3",
+      "purpose": "First active blend policy gate check",
+      "result": {
+        "status": "artifact_failed",
+        "blocking_failures": [
+          "men:calibration_degraded"
+        ]
+      }
+    },
+    {
+      "run_id": "20260316T205334Z_m005_s05_blend_refine_smoke",
+      "purpose": "Narrow blend weight refinement",
+      "result": {
+        "status": "artifact_failed",
+        "blocking_failures": [
+          "men:calibration_degraded"
+        ]
+      }
+    }
+  ],
+  "women": {
+    "decision": "hold_as_candidate",
+    "selected_candidate": "baseline_histgb_blend",
+    "weights": {
+      "baseline": 0.6,
+      "histgb_benchmark": 0.4
+    },
+    "test_brier_baseline": 0.14223205049047852,
+    "test_brier_candidate": 0.1363404443967679,
+    "delta_test_brier": -0.005891606093710616,
+    "calibration_gate": "passed",
+    "summary": "Concrete improvement candidate; no further high-level women-side research needed right now."
+  },
+  "men": {
+    "decision": "new_research_axis_required",
+    "selected_candidate": "baseline_histgb_blend",
+    "weights": {
+      "baseline": 0.5,
+      "histgb_benchmark": 0.5
+    },
+    "test_brier_baseline": 0.18175050076078456,
+    "test_brier_candidate": 0.18112539714261014,
+    "delta_test_brier": -0.0006251036181744163,
+    "blocking_failure": "calibration_degraded",
+    "calibration_deltas": {
+      "delta_ece": 0.008896634902444037,
+      "delta_wmae": 0.008896634902444037,
+      "delta_high_prob_gap_abs": 0.0233571541548917
+    },
+    "summary": "Blend improved Brier but repeated narrow refinement did not clear the calibration gate."
+  },
+  "next_focus": {
+    "primary_gender": "men",
+    "recommendation": "Move to a new men-only research axis instead of further blend-weight refinement.",
+    "women_priority": "stabilize_candidate"
+  }
+}

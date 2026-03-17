@@ -1,0 +1,77 @@
+{
+  "milestone_id": "M005",
+  "step_id": "S07",
+  "title": "Men Multi-Model Combo Follow-Up",
+  "status": "completed_with_gate_failure",
+  "completed_at": "2026-03-16",
+  "authoritative_runs": [
+    {
+      "run_id": "20260316T220058Z_m005_s07_xgboost_benchmark_smoke",
+      "purpose": "Add xgboost to the alternative-model benchmark",
+      "result": {
+        "status": "research_only",
+        "summary": "Useful benchmark, but LGBM + HistGB remained the best disciplined candidate."
+      }
+    },
+    {
+      "run_id": "20260316T220848Z_m005_s07_multi_model_combo_smoke",
+      "purpose": "Add catboost and compare pair/triple combos",
+      "result": {
+        "status": "research_only",
+        "summary": "Several men combos improved raw Test Brier, but Val discipline still favored baseline_histgb_blend."
+      }
+    },
+    {
+      "run_id": "20260316T222202Z_m005_s07_men_combo_followup_smoke",
+      "purpose": "Men-only shortlist follow-up with calibration-aware comparison",
+      "result": {
+        "status": "research_positive",
+        "selected_candidate_id": "baseline_histgb_xgboost_blend",
+        "research_decision": "promising_local_gate_candidate"
+      }
+    },
+    {
+      "run_id": "20260316T222943Z_m005_s07_men_combo_gate_smoke",
+      "purpose": "Active gate check for the shortlisted men combo candidate",
+      "result": {
+        "status": "artifact_failed",
+        "blocking_failures": [
+          "men:brier_degraded",
+          "men:calibration_degraded",
+          "women:calibration_degraded"
+        ]
+      }
+    }
+  ],
+  "men": {
+    "decision": "combo_branch_not_promotion_worthy",
+    "selected_shortlist_candidate": "baseline_histgb_xgboost_blend",
+    "weights": {
+      "baseline": 0.5,
+      "histgb_benchmark": 0.25,
+      "xgboost_benchmark": 0.25
+    },
+    "selected_calibration": "isotonic",
+    "baseline_test_brier": 0.18175050076078456,
+    "candidate_test_brier": 0.18515142216463232,
+    "delta_test_brier": 0.003400921403847762,
+    "baseline_test_auc": 0.8022388059701493,
+    "candidate_test_auc": 0.7898474047672087,
+    "delta_test_auc": -0.012391401202940577,
+    "summary": "The shortlisted combo candidate looked promising in local research but failed the real canonical gate."
+  },
+  "women": {
+    "decision": "keep_existing_candidate",
+    "selected_candidate": "baseline_histgb_blend",
+    "weights": {
+      "baseline": 0.6,
+      "histgb_benchmark": 0.4
+    },
+    "summary": "Women remains on the existing successful blend candidate; the men combo gate path was not a women improvement path."
+  },
+  "next_focus": {
+    "primary_gender": "men",
+    "recommendation": "Stop forcing combo-family follow-ups for now and move to a genuinely new men research axis.",
+    "women_priority": "stabilize_existing_candidate"
+  }
+}

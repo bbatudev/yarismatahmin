@@ -13,6 +13,9 @@ MEN_ONLY_FEATURES = {
     "FTr_diff",
     "MasseyPct_diff",
     "MasseyAvgRank_diff",
+    "MasseyRankStd_diff",
+    "MasseyPctSpread_diff",
+    "MasseyOrdinalRange_diff",
     "ProgramAge_diff",
 }
 
@@ -45,9 +48,13 @@ def _delta_or_none(*, current: Any, baseline: Any) -> float | None:
 def infer_feature_group(feature_name: str) -> str:
     lowered = feature_name.lower()
 
+    if "clash" in lowered:
+        return "style"
+    if "mispricing" in lowered:
+        return "seed"
     if "seed" in lowered:
         return "seed"
-    if "massey" in lowered or lowered.startswith("net"):
+    if "massey" in lowered or lowered.startswith("net") or "pyth" in lowered or "luck" in lowered:
         return "rating"
     if any(token in lowered for token in ("efg", "tov", "orb", "ftr", "netrtg", "truemargin", "pace")):
         return "four_factors"

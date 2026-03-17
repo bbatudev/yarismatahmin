@@ -74,6 +74,14 @@ def _build_context(tmp_path: Path, *, run_id: str, seed: int, git_commit: str, m
     drift_report = _write_json(run_dir / "drift_regime_report.json", {"ok": True})
     calibration_policy_report = _write_json(run_dir / "calibration_policy_report.json", {"ok": True})
     ensemble_report = _write_json(run_dir / "ensemble_report.json", {"ok": True})
+    alternative_model_report = _write_json(run_dir / "alternative_model_report.json", {"ok": True})
+    men_combo_followup_report = _write_json(run_dir / "men_combo_followup_report.json", {"ok": True})
+    men_tabpfn_followup_report = _write_json(run_dir / "men_tabpfn_followup_report.json", {"ok": True})
+    men_gate_aware_search_report = _write_json(run_dir / "men_gate_aware_search_report.json", {"ok": True})
+    blend_candidate_policy_report = _write_json(run_dir / "blend_candidate_policy_report.json", {"ok": True})
+    men_policy_refinement_report = _write_json(run_dir / "men_policy_refinement_report.json", {"ok": True})
+    men_external_prior_policy_report = _write_json(run_dir / "men_external_prior_policy_report.json", {"ok": True})
+    error_report = _write_json(run_dir / "error_decomposition_report.json", {"ok": True})
     governance_ledger = _write_text(run_dir / "governance_ledger.csv", "feature,group\n")
     governance_decision_report = _write_json(run_dir / "governance_decision_report.json", {"ok": True})
     ablation_report = _write_json(run_dir / "ablation_report.json", {"ok": True})
@@ -128,6 +136,59 @@ def _build_context(tmp_path: Path, *, run_id: str, seed: int, git_commit: str, m
                 "by_gender": {
                     "men": {"selected_candidate_id": "baseline"},
                     "women": {"selected_candidate_id": "baseline"},
+                },
+            },
+            "alternative_model": {
+                "report_json": str(alternative_model_report),
+                "aggregate": {"decision": "hold_current_model_family", "promising_genders": []},
+                "by_gender": {
+                    "men": {"research_decision": "hold_current_model_family"},
+                    "women": {"research_decision": "hold_current_model_family"},
+                },
+            },
+            "men_combo_followup": {
+                "report_json": str(men_combo_followup_report),
+                "policy_name": "men_combo_followup_v1",
+                "selected_candidate_id": "baseline_histgb_blend",
+                "research_decision": "hold_current_combo_shortlist",
+            },
+            "men_tabpfn_followup": {
+                "report_json": str(men_tabpfn_followup_report),
+                "policy_name": "men_tabpfn_followup_v1",
+                "selected_candidate_id": "reference_raw",
+                "research_decision": "hold_reference_candidate",
+            },
+            "men_gate_aware_search": {
+                "report_json": str(men_gate_aware_search_report),
+                "policy_name": "men_gate_aware_search_v1",
+                "selected_candidate_id": "baseline_histgb_blend",
+                "research_decision": "hold_current_reference",
+            },
+            "blend_candidate_policy": {
+                "report_json": str(blend_candidate_policy_report),
+                "aggregate": {"decision": "hold_research_only", "candidate_ready_genders": []},
+                "by_gender": {
+                    "men": {"candidate_status": "hold_research_only"},
+                    "women": {"candidate_status": "hold_research_only"},
+                },
+            },
+            "men_policy_refinement": {
+                "report_json": str(men_policy_refinement_report),
+                "status": "passed",
+                "research_decision": "hold_current_policy",
+                "selected_policy_id": "baseline_reference",
+            },
+            "men_external_prior_policy": {
+                "report_json": str(men_external_prior_policy_report),
+                "status": "passed",
+                "research_decision": "hold_blend_reference",
+                "selected_policy_id": "blend_reference",
+            },
+            "error_decomposition": {
+                "report_json": str(error_report),
+                "by_gender": {
+                    "men": {"overall": {"sample_count": 10}},
+                    "women": {"overall": {"sample_count": 10}},
                 },
             },
             "governance": {

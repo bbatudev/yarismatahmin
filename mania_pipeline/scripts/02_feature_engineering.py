@@ -26,6 +26,7 @@ ROLLING_WINDOWS = [7, 10, 14, 21]
 CLOSE_GAME_MARGIN = 5
 CLOSE_PRIOR_ALPHA = 2.0
 CLOSE_PRIOR_BETA = 2.0
+PYTHAGOREAN_EXPECTATION_EXPONENT = 11.5
 
 # Four Factors icin gerekli boxscore kolonlari (raw detailed dosyasi)
 REQUIRED_BOXSCORE_COLUMNS = [
@@ -180,6 +181,20 @@ def compute_four_factors(gl):
     return gl
 
 
+def compute_pythagorean_win_pct(avg_score, avg_opp_score, exponent=PYTHAGOREAN_EXPECTATION_EXPONENT):
+    """
+    Basketbol için klasik Pythagorean expectation.
+    Season aggregate seviyesinde kullanılır; yalnızca regular season özetlerinden türetilir.
+    """
+    score = pd.to_numeric(avg_score, errors="coerce").fillna(0.0).clip(lower=0.0)
+    opp_score = pd.to_numeric(avg_opp_score, errors="coerce").fillna(0.0).clip(lower=0.0)
+
+    score_pow = np.power(score.clip(lower=1e-6), exponent)
+    opp_pow = np.power(opp_score.clip(lower=1e-6), exponent)
+    denom = (score_pow + opp_pow).clip(lower=1e-12)
+    return score_pow / denom
+
+
 def build_season_aggregates(gl, has_ff=False):
     """
     Her takım-sezon için TÜM regular season agregasyonu.
@@ -198,6 +213,9 @@ def build_season_aggregates(gl, has_ff=False):
         ScoreVariance = ("TrueMargin", "std"),  # Dalgalanma indikatörü (Tutarsızlık)
         Games         = ("Win",       "count"),
     ).reset_index()
+
+    agg["PythWR"] = compute_pythagorean_win_pct(agg["AvgScore"], agg["AvgOppScore"])
+    agg["Luck"] = agg["WinPct"] - agg["PythWR"]
 
     # Overtime profili (tempo/volatilite sinyali)
     if {"NumOT", "WentOT", "IsMultiOT"}.issubset(gl_copy.columns):
@@ -339,7 +357,17 @@ def build_massey_features(massey_df, systems=ELITE_MASSEY_SYSTEMS):
     use_systems = [s for s in systems if s in available]
     if not use_systems:
         print(f"  [UYARI] Elite sistemler bulunamadı. Mevcut: {list(available[:10])}")
-        use_systems = list(available)  # fallback: tümü
+        return pd.DataFrame(
+            columns=[
+                "Season",
+                "TeamID",
+                "MasseyPct",
+                "MasseyAvgRank",
+                "MasseyRankStd",
+                "MasseyPctSpread",
+                "MasseyOrdinalRange",
+            ]
+        )
     else:
         print(f"  [OK] Massey: {len(use_systems)} elite sistem kullanılıyor: {use_systems}")
 
@@ -361,8 +389,28 @@ def build_massey_features(massey_df, systems=ELITE_MASSEY_SYSTEMS):
     
     # Rankın kendisini de alıyoruz ki farkı kullanabilelim
     agg_ranks = snap.groupby(["Season", "TeamID"])["OrdinalRank"].mean().rename("MasseyAvgRank").reset_index()
+    rank_dispersion = (
+        snap.groupby(["Season", "TeamID"])["OrdinalRank"]
+        .agg(MasseyRankStd="std", MasseyOrdinalMin="min", MasseyOrdinalMax="max")
+        .reset_index()
+    )
+    rank_dispersion["MasseyOrdinalRange"] = (
+        rank_dispersion["MasseyOrdinalMax"] - rank_dispersion["MasseyOrdinalMin"]
+    )
+    rank_dispersion = rank_dispersion.drop(columns=["MasseyOrdinalMin", "MasseyOrdinalMax"])
+
+    pct_dispersion = (
+        snap.groupby(["Season", "TeamID"])["RankPct"]
+        .agg(MasseyPctMin="min", MasseyPctMax="max")
+        .reset_index()
+    )
+    pct_dispersion["MasseyPctSpread"] = pct_dispersion["MasseyPctMax"] - pct_dispersion["MasseyPctMin"]
+    pct_dispersion = pct_dispersion.drop(columns=["MasseyPctMin", "MasseyPctMax"])
+
     consensus = consensus.merge(agg_ranks, on=["Season", "TeamID"])
-    
+    consensus = consensus.merge(rank_dispersion, on=["Season", "TeamID"], how="left")
+    consensus = consensus.merge(pct_dispersion, on=["Season", "TeamID"], how="left")
+
     return consensus
 
 
@@ -484,6 +532,43 @@ def build_program_features(team_base, teams_df):
     base["ProgramAge"] = (base["Season"] - base["FirstD1Season"]).clip(lower=0)
     base["ProgramAge"] = base["ProgramAge"].fillna(0)
     return base[["Season", "TeamID", "ProgramAge"]]
+
+
+def build_seed_mispricing_features(team_feats, gender="M"):
+    """
+    Committee seed ile takımın underlying season strength'i arasındaki sapma.
+    Sadece turnuva takımları için tanımlıdır; seed snapshot + season aggregate kullanır.
+    """
+    if "SeedNum" not in team_feats.columns:
+        return pd.DataFrame(columns=["Season", "TeamID"])
+
+    out = team_feats[["Season", "TeamID", "SeedNum"]].copy()
+    out = out[out["SeedNum"].notna()].copy()
+    if out.empty:
+        return pd.DataFrame(columns=["Season", "TeamID"])
+
+    out["SeedStrengthScore"] = ((17.0 - out["SeedNum"].astype(float)) / 16.0).clip(lower=0.0, upper=1.0)
+
+    if "PythWR" in team_feats.columns:
+        out = out.merge(team_feats[["Season", "TeamID", "PythWR"]], on=["Season", "TeamID"], how="left")
+        out["SeedPythMispricing"] = out["PythWR"] - out["SeedStrengthScore"]
+
+    if "NetRtg" in team_feats.columns:
+        net_pct = team_feats[["Season", "TeamID", "NetRtg"]].copy()
+        net_pct["NetRtgSeasonPct"] = (
+            net_pct.groupby("Season")["NetRtg"]
+            .rank(method="average", pct=True)
+            .clip(lower=0.0, upper=1.0)
+        )
+        out = out.merge(net_pct[["Season", "TeamID", "NetRtgSeasonPct"]], on=["Season", "TeamID"], how="left")
+        out["SeedNetRtgMispricing"] = out["NetRtgSeasonPct"] - out["SeedStrengthScore"]
+
+    if gender == "M" and "MasseyPct" in team_feats.columns:
+        out = out.merge(team_feats[["Season", "TeamID", "MasseyPct"]], on=["Season", "TeamID"], how="left")
+        out["SeedMasseyMispricing"] = out["MasseyPct"] - out["SeedStrengthScore"]
+
+    keep_cols = [column for column in out.columns if column not in {"SeedNum", "PythWR", "NetRtgSeasonPct", "MasseyPct"}]
+    return out[keep_cols]
 
 def build_conf_tourney_features(conf_tourney_df, ncaa_tourney_df, min_season=None):
     """
@@ -640,6 +725,13 @@ def build_matchup_matrix(tourney_df, team_features, gender="M", seed_round_slots
         lc = f"L_{c}"
         if wc in df.columns and lc in df.columns:
             df[f"{c}_diff"] = df[wc] - df[lc]
+
+    if {"W_eFG", "L_eFG", "W_BlkPct", "L_BlkPct"}.issubset(df.columns):
+        # Hücum verimliliğini rakibin pota koruma profiliyle çarpıştıran tek, yönlü style-clash sinyali.
+        df["StyleClash_eFG_BlkPct_diff"] = (
+            df["W_eFG"] * (1.0 - df["L_BlkPct"].clip(lower=0.0, upper=1.0))
+            - df["L_eFG"] * (1.0 - df["W_BlkPct"].clip(lower=0.0, upper=1.0))
+        )
 
     diff_cols = [c for c in df.columns if c.endswith("_diff")]
     
@@ -863,6 +955,10 @@ def run_pipeline(gender="M"):
     
     if massey_feats is not None:
         team_feats = team_feats.merge(massey_feats, on=["Season","TeamID"], how="left")
+
+    seed_mispricing_feats = build_seed_mispricing_features(team_feats, gender=gender)
+    if len(seed_mispricing_feats):
+        team_feats = team_feats.merge(seed_mispricing_feats, on=["Season", "TeamID"], how="left")
         
     # Kadınlar turnuvasında Box Scorelar 2010'da yayınlanmaya başladı.
     # Four Factors içeren algoritmaların çökmemesi için 2010 öncesi düşürülmelidir.

@@ -1,0 +1,46 @@
+{
+  "milestone_id": "M005",
+  "step_id": "S09",
+  "title": "Men Regime Routing Follow-Up",
+  "date": "2026-03-16",
+  "status": "completed_research_hold",
+  "authoritative_run": "20260316T231500Z_m005_s09_men_regime_routing_smoke",
+  "scope": {
+    "gender": "men",
+    "research_axis": "regime_routing",
+    "candidate_pool": [
+      "baseline_raw",
+      "blend_raw",
+      "external_prior_raw",
+      "combo_raw"
+    ],
+    "regimes": [
+      "close",
+      "medium",
+      "wide"
+    ]
+  },
+  "result": {
+    "research_decision": "promising_regime_router",
+    "research_reason": "regime_router_clears_local_gate",
+    "selected_policy_id": "regime_best_val_router",
+    "regime_selection": {
+      "close": "external_prior_raw",
+      "medium": "external_prior_raw",
+      "wide": "external_prior_raw"
+    }
+  },
+  "metrics": {
+    "selected_test_brier": 0.1767538639967954,
+    "selected_test_auc": 0.8218979728224549,
+    "selected_test_ece": 0.058743023353566196,
+    "delta_test_brier_vs_baseline": -0.008694509018031593,
+    "delta_test_ece_vs_baseline": -0.0334145292686288
+  },
+  "interpretation": {
+    "summary": "Routing did not create a new regime-specialist production recipe; it selected the same external-prior raw candidate in every major seed-gap regime.",
+    "men_best_raw_candidate": "committee_guardrail_medium_only",
+    "decision": "keep_as_research_evidence_only",
+    "next_state": "repo_internal_men_axes_largely_exhausted"
+  }
+}

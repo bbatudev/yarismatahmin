@@ -2,15 +2,12 @@ import importlib.util
 import json
 from pathlib import Path
 
-import pandas as pd
-import pytest
-
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "run_pipeline.py"
 
 
 def _load_module():
-    spec = importlib.util.spec_from_file_location("run_pipeline_under_test_m003_s04", SCRIPT_PATH)
+    spec = importlib.util.spec_from_file_location("run_pipeline_under_test_m005_s01", SCRIPT_PATH)
     assert spec and spec.loader, f"Could not load module spec from {SCRIPT_PATH}"
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -48,7 +45,7 @@ def _calibration_summary(ece: float, wmae: float, high_gap: float) -> dict:
             "threshold": 0.8,
             "sample_count": 20,
             "pred_mean": 0.87,
-            "actual_rate": 0.82,
+            "actual_rate": 0.81,
             "gap": high_gap,
             "reason": None,
         },
@@ -62,11 +59,8 @@ def _build_context(
     run_id: str,
     seed: int,
     git_commit: str,
-    submission_stage: str,
     men_brier: float,
     women_brier: float,
-    men_ece: float,
-    women_ece: float,
 ) -> dict:
     artifacts_root = tmp_path / "runs"
     run_dir = artifacts_root / run_id
@@ -88,10 +82,10 @@ def _build_context(
     ensemble_report = _write_json(run_dir / "ensemble_report.json", {"ok": True})
     alternative_model_report = _write_json(run_dir / "alternative_model_report.json", {"ok": True})
     blend_candidate_policy_report = _write_json(run_dir / "blend_candidate_policy_report.json", {"ok": True})
-    error_report = _write_json(run_dir / "error_decomposition_report.json", {"ok": True})
     governance_ledger = _write_text(run_dir / "governance_ledger.csv", "feature,group\n")
     governance_decision_report = _write_json(run_dir / "governance_decision_report.json", {"ok": True})
     ablation_report = _write_json(run_dir / "ablation_report.json", {"ok": True})
+    error_report = _write_json(run_dir / "error_decomposition_report.json", {"ok": True})
 
     stage_outputs = {
         "feature": {
@@ -116,8 +110,8 @@ def _build_context(
                 "bins_csv": str(calibration_bins),
                 "report_json": str(calibration_report),
                 "calibration_summary": {
-                    "men": _calibration_summary(men_ece, men_ece, 0.04),
-                    "women": _calibration_summary(women_ece, women_ece, 0.03),
+                    "men": _calibration_summary(0.03, 0.03, 0.04),
+                    "women": _calibration_summary(0.03, 0.03, 0.03),
                 },
             },
             "drift": {
@@ -161,13 +155,6 @@ def _build_context(
                     "women": {"candidate_status": "hold_research_only"},
                 },
             },
-            "error_decomposition": {
-                "report_json": str(error_report),
-                "by_gender": {
-                    "men": {"overall": {"sample_count": 10}},
-                    "women": {"overall": {"sample_count": 10}},
-                },
-            },
             "governance": {
                 "artifacts": {
                     "ledger_csv": str(governance_ledger),
@@ -181,28 +168,17 @@ def _build_context(
             "governance_decision": {
                 "report_json": str(governance_decision_report),
                 "by_gender": {
-                    "men": {
-                        "decision": "hold_baseline",
-                        "confidence": 0.50,
-                        "reason_codes": [],
-                        "evidence_bundle": {
-                            "calibration_policy": {
-                                "test_brier_improvement_vs_none": 0.0,
-                            }
-                        },
-                    },
-                    "women": {
-                        "decision": "hold_baseline",
-                        "confidence": 0.50,
-                        "reason_codes": [],
-                        "evidence_bundle": {
-                            "calibration_policy": {
-                                "test_brier_improvement_vs_none": 0.0,
-                            }
-                        },
-                    },
+                    "men": {"decision": "hold_baseline", "confidence": 0.5, "reason_codes": []},
+                    "women": {"decision": "hold_baseline", "confidence": 0.5, "reason_codes": []},
                 },
                 "aggregate": {"decision": "hold_baseline", "reason_codes": []},
+            },
+            "error_decomposition": {
+                "report_json": str(error_report),
+                "by_gender": {
+                    "men": {"overall": {"sample_count": 10}},
+                    "women": {"overall": {"sample_count": 10}},
+                },
             },
         },
     }
@@ -211,16 +187,24 @@ def _build_context(
         "run_id": run_id,
         "seed": seed,
         "git_commit": git_commit,
-        "submission_stage": submission_stage,
         "artifacts_root": str(artifacts_root),
         "run_dir": str(run_dir),
         "metadata_path": str(metadata_path),
         "stage_events_path": str(events_path),
         "stage_outputs": stage_outputs,
+        "submission_stage": "none",
     }
 
 
-def _write_baseline_metadata(context: dict):
+def _write_baseline_run(tmp_path: Path):
+    context = _build_context(
+        tmp_path,
+        run_id="20260315T050000Z_m005_s01_baseline",
+        seed=42,
+        git_commit="abc123",
+        men_brier=0.18,
+        women_brier=0.16,
+    )
     baseline_metadata = {
         "run_id": context["run_id"],
         "status": "succeeded",
@@ -231,107 +215,61 @@ def _write_baseline_metadata(context: dict):
     _write_json(Path(context["run_dir"]) / "run_metadata.json", baseline_metadata)
 
 
-def test_stage_artifact_emits_caution_readiness_when_submission_not_requested(tmp_path):
+def _write_backtest_report(path: Path) -> Path:
+    payload = {
+        "generated_at": "2026-03-15T00:40:14.896873Z",
+        "by_gender": {
+            "men": {
+                "rows": [
+                    {"season": 2018, "status": "passed", "row_counts": {"test": 134}, "metrics": {"test_brier": 0.20995}},
+                    {"season": 2019, "status": "passed", "row_counts": {"test": 134}, "metrics": {"test_brier": 0.18064}},
+                    {"season": 2022, "status": "passed", "row_counts": {"test": 134}, "metrics": {"test_brier": 0.22894}},
+                    {"season": 2023, "status": "passed", "row_counts": {"test": 134}, "metrics": {"test_brier": 0.20961}},
+                    {"season": 2024, "status": "passed", "row_counts": {"test": 134}, "metrics": {"test_brier": 0.20629}},
+                    {"season": 2025, "status": "passed", "row_counts": {"test": 134}, "metrics": {"test_brier": 0.15861}},
+                ]
+            },
+            "women": {
+                "rows": [
+                    {"season": 2018, "status": "passed", "row_counts": {"test": 126}, "metrics": {"test_brier": 0.16350}},
+                    {"season": 2019, "status": "passed", "row_counts": {"test": 126}, "metrics": {"test_brier": 0.13377}},
+                    {"season": 2022, "status": "passed", "row_counts": {"test": 134}, "metrics": {"test_brier": 0.18414}},
+                    {"season": 2023, "status": "passed", "row_counts": {"test": 134}, "metrics": {"test_brier": 0.17721}},
+                    {"season": 2024, "status": "passed", "row_counts": {"test": 134}, "metrics": {"test_brier": 0.13818}},
+                    {"season": 2025, "status": "passed", "row_counts": {"test": 134}, "metrics": {"test_brier": 0.13936}},
+                ]
+            },
+        },
+    }
+    return _write_json(path, payload)
+
+
+def test_stage_artifact_emits_multi_season_weighted_promotion_gate_report(tmp_path):
     module = _load_module()
+
+    _write_baseline_run(tmp_path)
+    backtest_report = _write_backtest_report(tmp_path / "reports" / "season_backtest.json")
 
     context = _build_context(
         tmp_path,
-        run_id="20260315T040100Z_m003_s04_caution",
-        seed=42,
-        git_commit="abc123",
-        submission_stage="none",
-        men_brier=0.18,
-        women_brier=0.16,
-        men_ece=0.03,
-        women_ece=0.03,
-    )
-
-    result = module.stage_artifact(context)
-    readiness_path = Path(result["readiness"]["report_json"])
-    assert readiness_path.exists()
-
-    readiness = json.loads(readiness_path.read_text(encoding="utf-8"))
-    assert readiness["status"] == "caution"
-    assert "submission_not_requested" in readiness["warnings"]
-
-
-def test_stage_artifact_writes_readiness_blocked_before_raising_regression_failure(tmp_path):
-    module = _load_module()
-
-    baseline_context = _build_context(
-        tmp_path,
-        run_id="20260315T040000Z_m003_s04_baseline_blocked",
-        seed=42,
-        git_commit="abc123",
-        submission_stage="none",
-        men_brier=0.18,
-        women_brier=0.16,
-        men_ece=0.02,
-        women_ece=0.02,
-    )
-    _write_baseline_metadata(baseline_context)
-
-    current_context = _build_context(
-        tmp_path,
-        run_id="20260315T040300Z_m003_s04_blocked",
+        run_id="20260315T050100Z_m005_s01_current",
         seed=42,
         git_commit="newer",
-        submission_stage="none",
         men_brier=0.18,
-        women_brier=0.20,
-        men_ece=0.02,
-        women_ece=0.06,
+        women_brier=0.1421,
     )
+    context["season_backtest_report"] = str(backtest_report)
 
-    with pytest.raises(RuntimeError, match="regression gate failed"):
-        module.stage_artifact(current_context)
+    result = module.stage_artifact(context)
 
-    readiness_path = Path(current_context["run_dir"]) / "submission_readiness_report.json"
-    assert readiness_path.exists()
-    readiness = json.loads(readiness_path.read_text(encoding="utf-8"))
-    assert readiness["status"] == "blocked"
-    assert "regression_gate_failed" in readiness["blocking_checks"]
+    payload = result["weighted_promotion_gate"]
+    report_path = Path(payload["report_json"])
+    assert report_path.exists()
 
-
-def test_stage_artifact_emits_ready_readiness_when_submission_and_gates_pass(tmp_path, monkeypatch):
-    module = _load_module()
-
-    baseline_context = _build_context(
-        tmp_path,
-        run_id="20260315T040000Z_m003_s04_baseline",
-        seed=42,
-        git_commit="abc123",
-        submission_stage="none",
-        men_brier=0.18,
-        women_brier=0.16,
-        men_ece=0.03,
-        women_ece=0.03,
-    )
-    _write_baseline_metadata(baseline_context)
-
-    sample_dir = tmp_path / "kaggle"
-    sample_dir.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame({"ID": ["2026_1101_1102", "2026_1103_1104"], "Pred": [0.5, 0.5]}).to_csv(
-        sample_dir / "SampleSubmissionStage2.csv", index=False
-    )
-    monkeypatch.setattr(module, "KAGGLE_DATA_DIR", sample_dir, raising=False)
-
-    current_context = _build_context(
-        tmp_path,
-        run_id="20260315T040200Z_m003_s04_ready",
-        seed=42,
-        git_commit="abc123",
-        submission_stage="stage2",
-        men_brier=0.18,
-        women_brier=0.16,
-        men_ece=0.03,
-        women_ece=0.03,
-    )
-
-    result = module.stage_artifact(current_context)
-    readiness = json.loads(Path(result["readiness"]["report_json"]).read_text(encoding="utf-8"))
-
-    assert readiness["status"] == "ready"
-    assert readiness["blocking_checks"] == []
-    assert readiness["checks"]["submission"]["status"] == "passed"
-    assert result["submission"]["status"] == "passed"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["status"] == "passed"
+    assert report["aggregate"]["decision"] in {"hold_baseline", "promote_candidate"}
+    assert set(report["by_gender"].keys()) == {"men", "women"}
+    assert report["by_gender"]["men"]["weighted_historical_mean_brier"] is not None
+    assert report["by_gender"]["women"]["current_test_brier"] == 0.1421
+    assert report["aggregate"]["decision"] == "hold_baseline"

@@ -6,6 +6,7 @@ import json
 import os
 import pickle
 import re
+from itertools import combinations
 
 import numpy as np
 import pandas as pd
@@ -19,14 +20,35 @@ from pathlib import Path
 from typing import Any, Callable
 
 from sklearn.isotonic import IsotonicRegression
+from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import log_loss, roc_auc_score
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import SplineTransformer, StandardScaler
+
+try:
+    from xgboost import XGBClassifier
+except Exception:  # pragma: no cover - optional dependency
+    XGBClassifier = None
+
+try:
+    from catboost import CatBoostClassifier
+except Exception:  # pragma: no cover - optional dependency
+    CatBoostClassifier = None
+
+try:
+    from tabpfn import TabPFNClassifier
+    from tabpfn.settings import settings as tabpfn_settings
+except Exception:  # pragma: no cover - optional dependency
+    TabPFNClassifier = None
+    tabpfn_settings = None
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PIPELINE_DIR = SCRIPT_DIR.parent
 REPO_ROOT = PIPELINE_DIR.parent
 KAGGLE_DATA_DIR = REPO_ROOT / "march-machine-leraning-mania-2026"
+FALLBACK_KAGGLE_DATA_DIR = PIPELINE_DIR / "data" / "raw"
 DEFAULT_ARTIFACTS_ROOT = PIPELINE_DIR / "artifacts" / "runs"
 
 CANONICAL_STAGES = ("feature", "train", "eval_report", "artifact")
@@ -51,6 +73,15 @@ DRIFT_REGIME_ORDER = ("close", "medium", "wide")
 CALIBRATION_POLICY_METHODS = ("none", "platt", "isotonic")
 CALIBRATION_POLICY_MIN_VAL_SAMPLES = 80
 CALIBRATION_POLICY_MIN_IMPROVEMENT = 0.001
+ERROR_BUCKET_DEFINITIONS = (
+    ("low_confidence_lt_0.45", None, 0.45),
+    ("close_call_0.45_0.55", 0.45, 0.55),
+    ("confident_0.55_0.80", 0.55, 0.80),
+    ("high_confidence_ge_0.80", 0.80, None),
+)
+OVERCONFIDENT_THRESHOLD = 0.80
+ERROR_DIAGNOSTIC_MIN_BUCKET_SAMPLES = 10
+WEIGHTED_PROMOTION_MIN_IMPROVEMENT = 1e-4
 HPO_ALLOWED_PROFILES = ("baseline", "quality_v1")
 HPO_MAX_TRIALS = 20
 HPO_PARAM_SPACE = {
@@ -68,6 +99,33 @@ HPO_OBJECTIVE_GAP_PENALTY = 0.10
 ENSEMBLE_WEIGHT_GRID = (0.25, 0.5, 0.75)
 ENSEMBLE_MIN_VAL_IMPROVEMENT = 1e-4
 ENSEMBLE_MAX_TEST_BRIER_DEGRADATION = 0.0
+STACKING_POLICY_MIN_VAL_SAMPLES = 20
+STACKING_POLICY_MIN_IMPROVEMENT = 1e-4
+ALTERNATIVE_MODEL_MIN_VAL_IMPROVEMENT = 1e-4
+ALTERNATIVE_MODEL_WEIGHT_GRID = (0.25, 0.33, 0.4, 0.5, 0.6, 0.67, 0.75)
+PREDICTION_POLICIES = ("baseline", "blend_candidate_v1", "men_external_prior_policy_v1", "men_combo_followup_v1")
+MEN_POLICY_MIN_VAL_IMPROVEMENT = 1e-4
+FEATURE_BRANCH_MIN_VAL_IMPROVEMENT = 1e-4
+M005_S04_FEATURE_COLUMNS = {
+    "men": (
+        "PythWR_diff",
+        "Luck_diff",
+        "MasseyRankStd_diff",
+        "MasseyPctSpread_diff",
+        "MasseyOrdinalRange_diff",
+        "StyleClash_eFG_BlkPct_diff",
+        "SeedPythMispricing_diff",
+        "SeedNetRtgMispricing_diff",
+        "SeedMasseyMispricing_diff",
+    ),
+    "women": (
+        "PythWR_diff",
+        "Luck_diff",
+        "StyleClash_eFG_BlkPct_diff",
+        "SeedPythMispricing_diff",
+        "SeedNetRtgMispricing_diff",
+    ),
+}
 
 
 def _now_utc_iso() -> str:
@@ -95,6 +153,13 @@ def _git_commit() -> str:
     except Exception:
         pass
     return "unknown"
+
+
+def _normalize_profile_name(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    return text or None
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -135,6 +200,18 @@ def _load_script_module_direct(filename: str, module_name: str):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _resolve_pipeline_data_dir(*, required_files: tuple[str, ...] = ()) -> Path:
+    candidates = (KAGGLE_DATA_DIR, FALLBACK_KAGGLE_DATA_DIR)
+    for candidate in candidates:
+        if not candidate.exists():
+            continue
+        if required_files and not all((candidate / name).exists() for name in required_files):
+            continue
+        return candidate
+
+    return candidates[0]
 
 
 @lru_cache(maxsize=1)
@@ -311,7 +388,18 @@ def _record_stage_finished(
 def stage_feature(context: dict[str, Any]) -> dict[str, Any]:
     feature_module = _load_script_module("02_feature_engineering.py", "feature_engineering_stage")
 
-    feature_module.DATA_DIR = str(REPO_ROOT / "march-machine-leraning-mania-2026")
+    feature_module.DATA_DIR = str(
+        _resolve_pipeline_data_dir(
+            required_files=(
+                "MRegularSeasonCompactResults.csv",
+                "MNCAATourneyCompactResults.csv",
+                "MRegularSeasonDetailedResults.csv",
+                "WRegularSeasonCompactResults.csv",
+                "WNCAATourneyCompactResults.csv",
+                "WRegularSeasonDetailedResults.csv",
+            )
+        )
+    )
     feature_module.OUT_DIR = str(PIPELINE_DIR / "artifacts" / "data")
     os.makedirs(feature_module.OUT_DIR, exist_ok=True)
 
@@ -887,6 +975,25 @@ def _score_val_test_from_split_probabilities(
     }
 
 
+def _score_all_splits_from_split_probabilities(
+    *,
+    gender_key: str,
+    split_probabilities: dict[str, dict[str, np.ndarray]],
+) -> dict[str, Any]:
+    metrics_by_split: dict[str, Any] = {}
+    for split_label in CANONICAL_SPLITS:
+        split_cache = split_probabilities.get(split_label, {}) if isinstance(split_probabilities, dict) else {}
+        split_true = np.asarray(split_cache.get("y_true", np.asarray([], dtype=float)), dtype=float)
+        split_prob = np.asarray(split_cache.get("y_prob", np.asarray([], dtype=float)), dtype=float)
+        metrics_by_split[split_label] = _score_probability_bundle(
+            gender_key=gender_key,
+            split_label=split_label,
+            y_true=split_true,
+            y_prob=split_prob,
+        )
+    return metrics_by_split
+
+
 def _predict_model_split_probabilities(
     *,
     model: Any,
@@ -895,7 +1002,7 @@ def _predict_model_split_probabilities(
     gender_key: str,
 ) -> dict[str, dict[str, np.ndarray]]:
     split_cache: dict[str, dict[str, np.ndarray]] = {}
-    for split_label in ("Val", "Test"):
+    for split_label in CANONICAL_SPLITS:
         split_df = feature_df[feature_df["Split"] == split_label].copy()
         if split_df.empty:
             split_cache[split_label] = {
@@ -918,6 +1025,423 @@ def _predict_model_split_probabilities(
         }
 
     return split_cache
+
+
+def _fit_histgb_candidate_split_probabilities(
+    *,
+    context: dict[str, Any],
+    gender_key: str,
+    feature_df: pd.DataFrame,
+    feature_columns: list[str],
+) -> tuple[dict[str, dict[str, np.ndarray]] | None, str | None]:
+    train_df = feature_df[feature_df["Split"] == "Train"].copy()
+    val_df = feature_df[feature_df["Split"] == "Val"].copy()
+    available_feature_columns = [column for column in feature_columns if column in feature_df.columns]
+
+    if not available_feature_columns:
+        return None, "feature_columns_missing"
+    if train_df.empty or val_df.empty:
+        return None, "insufficient_split_rows"
+    if np.unique(train_df["Target"]).shape[0] < 2:
+        return None, "single_class_train_target"
+
+    try:
+        alt_model = HistGradientBoostingClassifier(
+            learning_rate=0.05,
+            max_depth=3,
+            max_iter=250,
+            min_samples_leaf=20,
+            random_state=int(context.get("seed", 42)) + (3100 if gender_key == "men" else 3200),
+        )
+        alt_model.fit(
+            train_df.loc[:, available_feature_columns],
+            train_df["Target"].to_numpy(dtype=float),
+        )
+    except Exception as exc:
+        return None, f"alt_fit_failed:{exc.__class__.__name__}"
+
+    split_cache = _predict_model_split_probabilities(
+        model=alt_model,
+        feature_df=feature_df,
+        feature_columns=available_feature_columns,
+        gender_key=gender_key,
+    )
+    return split_cache, None
+
+
+def _fit_xgboost_candidate_split_probabilities(
+    *,
+    context: dict[str, Any],
+    gender_key: str,
+    feature_df: pd.DataFrame,
+    feature_columns: list[str],
+) -> tuple[dict[str, dict[str, np.ndarray]] | None, str | None]:
+    if XGBClassifier is None:
+        return None, "xgboost_unavailable"
+
+    train_df = feature_df[feature_df["Split"] == "Train"].copy()
+    val_df = feature_df[feature_df["Split"] == "Val"].copy()
+    available_feature_columns = [column for column in feature_columns if column in feature_df.columns]
+
+    if not available_feature_columns:
+        return None, "feature_columns_missing"
+    if train_df.empty or val_df.empty:
+        return None, "insufficient_split_rows"
+    if np.unique(train_df["Target"]).shape[0] < 2:
+        return None, "single_class_train_target"
+
+    try:
+        alt_model = XGBClassifier(
+            n_estimators=250,
+            max_depth=4,
+            learning_rate=0.05,
+            subsample=0.9,
+            colsample_bytree=0.9,
+            reg_lambda=1.0,
+            min_child_weight=1.0,
+            objective="binary:logistic",
+            eval_metric="logloss",
+            random_state=int(context.get("seed", 42)) + (3300 if gender_key == "men" else 3400),
+            n_jobs=1,
+            verbosity=0,
+        )
+        alt_model.fit(
+            train_df.loc[:, available_feature_columns],
+            train_df["Target"].to_numpy(dtype=float),
+        )
+    except Exception as exc:
+        return None, f"xgboost_fit_failed:{exc.__class__.__name__}"
+
+    split_cache = _predict_model_split_probabilities(
+        model=alt_model,
+        feature_df=feature_df,
+        feature_columns=available_feature_columns,
+        gender_key=gender_key,
+    )
+    return split_cache, None
+
+
+def _fit_catboost_candidate_split_probabilities(
+    *,
+    context: dict[str, Any],
+    gender_key: str,
+    feature_df: pd.DataFrame,
+    feature_columns: list[str],
+) -> tuple[dict[str, dict[str, np.ndarray]] | None, str | None]:
+    if CatBoostClassifier is None:
+        return None, "catboost_unavailable"
+
+    train_df = feature_df[feature_df["Split"] == "Train"].copy()
+    val_df = feature_df[feature_df["Split"] == "Val"].copy()
+    available_feature_columns = [column for column in feature_columns if column in feature_df.columns]
+
+    if not available_feature_columns:
+        return None, "feature_columns_missing"
+    if train_df.empty or val_df.empty:
+        return None, "insufficient_split_rows"
+    if np.unique(train_df["Target"]).shape[0] < 2:
+        return None, "single_class_train_target"
+
+    try:
+        alt_model = CatBoostClassifier(
+            iterations=250,
+            depth=4,
+            learning_rate=0.05,
+            l2_leaf_reg=3.0,
+            loss_function="Logloss",
+            eval_metric="Logloss",
+            random_seed=int(context.get("seed", 42)) + (3500 if gender_key == "men" else 3600),
+            verbose=False,
+            allow_writing_files=False,
+        )
+        alt_model.fit(
+            train_df.loc[:, available_feature_columns],
+            train_df["Target"].to_numpy(dtype=float),
+        )
+    except Exception as exc:
+        return None, f"catboost_fit_failed:{exc.__class__.__name__}"
+
+    split_cache = _predict_model_split_probabilities(
+        model=alt_model,
+        feature_df=feature_df,
+        feature_columns=available_feature_columns,
+        gender_key=gender_key,
+    )
+    return split_cache, None
+
+
+def _fit_tabpfn_candidate_split_probabilities(
+    *,
+    context: dict[str, Any],
+    gender_key: str,
+    feature_df: pd.DataFrame,
+    feature_columns: list[str],
+) -> tuple[dict[str, dict[str, np.ndarray]] | None, str | None]:
+    if TabPFNClassifier is None:
+        return None, "tabpfn_unavailable"
+
+    train_df = feature_df[feature_df["Split"] == "Train"].copy()
+    val_df = feature_df[feature_df["Split"] == "Val"].copy()
+    available_feature_columns = [column for column in feature_columns if column in feature_df.columns]
+
+    if not available_feature_columns:
+        return None, "feature_columns_missing"
+    if train_df.empty or val_df.empty:
+        return None, "insufficient_split_rows"
+    if np.unique(train_df["Target"]).shape[0] < 2:
+        return None, "single_class_train_target"
+
+    model_path = PIPELINE_DIR / "artifacts" / "models" / "tabpfn" / "tabpfn-v2.5-classifier-v2.5_default.ckpt"
+    if not model_path.exists():
+        return None, "tabpfn_weights_missing"
+
+    try:
+        if tabpfn_settings is not None:
+            model_cache_dir = Path(context["run_dir"]) / "tabpfn_model_cache"
+            model_cache_dir.mkdir(parents=True, exist_ok=True)
+            tabpfn_settings.tabpfn.model_cache_dir = model_cache_dir.resolve()
+        alt_model = TabPFNClassifier(
+            device="cpu",
+            n_estimators=4,
+            fit_mode="low_memory",
+            ignore_pretraining_limits=True,
+            model_path=model_path,
+            random_state=int(context.get("seed", 42)) + (3700 if gender_key == "men" else 3800),
+            n_preprocessing_jobs=1,
+        )
+        alt_model.fit(
+            train_df.loc[:, available_feature_columns],
+            train_df["Target"].to_numpy(dtype=float),
+        )
+    except Exception as exc:
+        return None, f"tabpfn_fit_failed:{exc.__class__.__name__}"
+
+    split_cache = _predict_model_split_probabilities(
+        model=alt_model,
+        feature_df=feature_df,
+        feature_columns=available_feature_columns,
+        gender_key=gender_key,
+    )
+    return split_cache, None
+
+
+def _fit_logistic_candidate_split_probabilities(
+    *,
+    context: dict[str, Any],
+    gender_key: str,
+    feature_df: pd.DataFrame,
+    feature_columns: list[str],
+) -> tuple[dict[str, dict[str, np.ndarray]] | None, str | None]:
+    train_df = feature_df[feature_df["Split"] == "Train"].copy()
+    val_df = feature_df[feature_df["Split"] == "Val"].copy()
+    available_feature_columns = [column for column in feature_columns if column in feature_df.columns]
+
+    if not available_feature_columns:
+        return None, "feature_columns_missing"
+    if train_df.empty or val_df.empty:
+        return None, "insufficient_split_rows"
+    if np.unique(train_df["Target"]).shape[0] < 2:
+        return None, "single_class_train_target"
+
+    try:
+        alt_model = Pipeline(
+            steps=[
+                ("scaler", StandardScaler()),
+                (
+                    "logreg",
+                    LogisticRegression(
+                        C=0.5,
+                        random_state=int(context.get("seed", 42)) + (3900 if gender_key == "men" else 4000),
+                        solver="lbfgs",
+                        max_iter=500,
+                    ),
+                ),
+            ]
+        )
+        alt_model.fit(
+            train_df.loc[:, available_feature_columns],
+            train_df["Target"].to_numpy(dtype=float),
+        )
+    except Exception as exc:
+        return None, f"logistic_fit_failed:{exc.__class__.__name__}"
+
+    split_cache = _predict_model_split_probabilities(
+        model=alt_model,
+        feature_df=feature_df,
+        feature_columns=available_feature_columns,
+        gender_key=gender_key,
+    )
+    return split_cache, None
+
+
+def _fit_spline_logistic_candidate_split_probabilities(
+    *,
+    context: dict[str, Any],
+    gender_key: str,
+    feature_df: pd.DataFrame,
+    feature_columns: list[str],
+) -> tuple[dict[str, dict[str, np.ndarray]] | None, str | None]:
+    train_df = feature_df[feature_df["Split"] == "Train"].copy()
+    val_df = feature_df[feature_df["Split"] == "Val"].copy()
+    available_feature_columns = [column for column in feature_columns if column in feature_df.columns]
+
+    if not available_feature_columns:
+        return None, "feature_columns_missing"
+    if train_df.empty or val_df.empty:
+        return None, "insufficient_split_rows"
+    if np.unique(train_df["Target"]).shape[0] < 2:
+        return None, "single_class_train_target"
+
+    try:
+        alt_model = Pipeline(
+            steps=[
+                ("scaler", StandardScaler()),
+                (
+                    "spline",
+                    SplineTransformer(
+                        n_knots=4,
+                        degree=2,
+                        include_bias=False,
+                    ),
+                ),
+                (
+                    "logreg",
+                    LogisticRegression(
+                        C=0.25,
+                        random_state=int(context.get("seed", 42)) + (4100 if gender_key == "men" else 4200),
+                        solver="lbfgs",
+                        max_iter=500,
+                    ),
+                ),
+            ]
+        )
+        alt_model.fit(
+            train_df.loc[:, available_feature_columns],
+            train_df["Target"].to_numpy(dtype=float),
+        )
+    except Exception as exc:
+        return None, f"spline_logistic_fit_failed:{exc.__class__.__name__}"
+
+    split_cache = _predict_model_split_probabilities(
+        model=alt_model,
+        feature_df=feature_df,
+        feature_columns=available_feature_columns,
+        gender_key=gender_key,
+    )
+    return split_cache, None
+
+
+def _fit_available_alternative_model_split_caches(
+    *,
+    context: dict[str, Any],
+    gender_key: str,
+    feature_df: pd.DataFrame,
+    feature_columns: list[str],
+) -> tuple[dict[str, dict[str, dict[str, np.ndarray]]], dict[str, str | None]]:
+    alternative_specs = (
+        ("histgb_benchmark", _fit_histgb_candidate_split_probabilities),
+        ("logistic_benchmark", _fit_logistic_candidate_split_probabilities),
+        ("spline_logistic_benchmark", _fit_spline_logistic_candidate_split_probabilities),
+        ("xgboost_benchmark", _fit_xgboost_candidate_split_probabilities),
+        ("catboost_benchmark", _fit_catboost_candidate_split_probabilities),
+        ("tabpfn_benchmark", _fit_tabpfn_candidate_split_probabilities),
+    )
+    split_caches: dict[str, dict[str, dict[str, np.ndarray]]] = {}
+    reasons: dict[str, str | None] = {}
+    for candidate_id, fit_fn in alternative_specs:
+        split_cache, reason = fit_fn(
+            context=context,
+            gender_key=gender_key,
+            feature_df=feature_df,
+            feature_columns=feature_columns,
+        )
+        reasons[candidate_id] = reason
+        if split_cache is not None:
+            split_caches[candidate_id] = split_cache
+    return split_caches, reasons
+
+
+def _build_weighted_split_probabilities(
+    *,
+    component_split_probabilities: dict[str, dict[str, dict[str, np.ndarray]]],
+    weights: dict[str, float],
+) -> tuple[dict[str, dict[str, np.ndarray]] | None, str | None]:
+    if not isinstance(weights, dict) or not weights:
+        return None, "weights_missing"
+
+    first_component_id = next(iter(weights.keys()))
+    first_component = component_split_probabilities.get(first_component_id, {})
+    if not isinstance(first_component, dict):
+        return None, f"component_missing:{first_component_id}"
+
+    split_cache: dict[str, dict[str, np.ndarray]] = {}
+    for split_label in ("Val", "Test"):
+        first_split = first_component.get(split_label, {})
+        y_true = np.asarray(first_split.get("y_true", np.asarray([], dtype=float)), dtype=float)
+        if y_true.size == 0:
+            return None, f"split_missing:{split_label}"
+        blended_prob = np.zeros_like(y_true, dtype=float)
+        for component_id, weight in weights.items():
+            component_split = component_split_probabilities.get(component_id, {}).get(split_label, {})
+            component_true = np.asarray(component_split.get("y_true", np.asarray([], dtype=float)), dtype=float)
+            component_prob = np.asarray(component_split.get("y_prob", np.asarray([], dtype=float)), dtype=float)
+            if component_true.shape != y_true.shape or component_prob.shape != y_true.shape:
+                return None, f"shape_mismatch:{component_id}:{split_label}"
+            blended_prob += float(weight) * component_prob
+        split_cache[split_label] = {
+            "y_true": y_true,
+            "y_prob": np.clip(blended_prob, 0.0, 1.0),
+        }
+    return split_cache, None
+
+
+def _local_gate_check(
+    *,
+    candidate_test_metrics: dict[str, Any],
+    baseline_test_metrics: dict[str, Any],
+) -> dict[str, Any]:
+    candidate_brier = _as_float_or_none(candidate_test_metrics.get("brier"))
+    candidate_ece = _as_float_or_none(candidate_test_metrics.get("ece"))
+    candidate_wmae = _as_float_or_none(candidate_test_metrics.get("wmae"))
+    candidate_gap = _as_float_or_none(candidate_test_metrics.get("high_prob_gap"))
+    baseline_brier = _as_float_or_none(baseline_test_metrics.get("brier"))
+    baseline_ece = _as_float_or_none(baseline_test_metrics.get("ece"))
+    baseline_wmae = _as_float_or_none(baseline_test_metrics.get("wmae"))
+    baseline_gap = _as_float_or_none(baseline_test_metrics.get("high_prob_gap"))
+
+    candidate_gap_abs = abs(candidate_gap) if isinstance(candidate_gap, (int, float)) else None
+    baseline_gap_abs = abs(baseline_gap) if isinstance(baseline_gap, (int, float)) else None
+
+    passed = (
+        isinstance(candidate_brier, (int, float))
+        and isinstance(baseline_brier, (int, float))
+        and candidate_brier <= baseline_brier + REGRESSION_NUMERIC_EPS
+        and isinstance(candidate_ece, (int, float))
+        and isinstance(baseline_ece, (int, float))
+        and candidate_ece <= baseline_ece + REGRESSION_NUMERIC_EPS
+        and isinstance(candidate_wmae, (int, float))
+        and isinstance(baseline_wmae, (int, float))
+        and candidate_wmae <= baseline_wmae + REGRESSION_NUMERIC_EPS
+        and isinstance(candidate_gap_abs, (int, float))
+        and isinstance(baseline_gap_abs, (int, float))
+        and candidate_gap_abs <= baseline_gap_abs + REGRESSION_NUMERIC_EPS
+    )
+    return {
+        "status": "passed" if passed else "failed",
+        "delta_brier": _safe_delta(candidate_brier, baseline_brier),
+        "delta_ece": _safe_delta(candidate_ece, baseline_ece),
+        "delta_wmae": _safe_delta(candidate_wmae, baseline_wmae),
+        "delta_high_prob_gap_abs": (
+            float(candidate_gap_abs - baseline_gap_abs)
+            if isinstance(candidate_gap_abs, (int, float)) and isinstance(baseline_gap_abs, (int, float))
+            else None
+        ),
+    }
+
+
+def _probability_to_logit(probabilities: np.ndarray) -> np.ndarray:
+    clipped = np.clip(np.asarray(probabilities, dtype=float), 1e-6, 1 - 1e-6)
+    return np.log(clipped / (1.0 - clipped))
 
 
 def _evaluate_ensemble_candidates_for_gender(
@@ -1332,6 +1856,3570 @@ def _build_ensemble_report(
     }
 
 
+def _safe_probability_correlation(left: np.ndarray, right: np.ndarray) -> float | None:
+    left = np.asarray(left, dtype=float)
+    right = np.asarray(right, dtype=float)
+    if left.shape != right.shape or left.shape[0] < 2:
+        return None
+    if np.allclose(left, left[0]) or np.allclose(right, right[0]):
+        return None
+    corr = np.corrcoef(left, right)[0, 1]
+    if np.isfinite(corr):
+        return float(corr)
+    return None
+
+
+def _build_stacking_policy_report_for_gender(
+    *,
+    context: dict[str, Any],
+    train_module: Any,
+    gender_key: str,
+    feature_df: pd.DataFrame,
+    baseline_split_probabilities: dict[str, dict[str, np.ndarray]],
+    hpo_gender_payload: dict[str, Any],
+    hpo_target_profile: str,
+    calibration_candidate_split_probabilities: dict[str, dict[str, dict[str, np.ndarray]]],
+) -> dict[str, Any]:
+    candidate_split_probabilities: dict[str, dict[str, dict[str, np.ndarray]]] = {
+        "baseline": baseline_split_probabilities,
+    }
+    candidate_metrics: dict[str, dict[str, Any]] = {
+        "baseline": _score_val_test_from_split_probabilities(
+            gender_key=gender_key,
+            split_probabilities=baseline_split_probabilities,
+        )
+    }
+
+    best_overrides = (
+        hpo_gender_payload.get("best_param_overrides") if isinstance(hpo_gender_payload, dict) else None
+    )
+    if isinstance(best_overrides, dict) and best_overrides:
+        gender_label = "M" if gender_key == "men" else "W"
+        random_state = int(context.get("seed", 42)) + (1000 if gender_key == "men" else 2000)
+        try:
+            hpo_model, hpo_train_payload = _train_with_optional_profile(
+                train_module=train_module,
+                df=feature_df,
+                gender_label=gender_label,
+                random_state=random_state,
+                profile=hpo_target_profile,
+                param_overrides=best_overrides,
+            )
+            hpo_snapshot = hpo_train_payload.get("feature_snapshot", {}) if isinstance(hpo_train_payload, dict) else {}
+            hpo_feature_columns = (
+                hpo_snapshot.get("feature_columns") if isinstance(hpo_snapshot, dict) else None
+            )
+            if isinstance(hpo_feature_columns, list) and hpo_feature_columns:
+                hpo_split_cache = _predict_model_split_probabilities(
+                    model=hpo_model,
+                    feature_df=feature_df,
+                    feature_columns=hpo_feature_columns,
+                    gender_key=gender_key,
+                )
+                candidate_split_probabilities["hpo_best"] = hpo_split_cache
+                candidate_metrics["hpo_best"] = _score_val_test_from_split_probabilities(
+                    gender_key=gender_key,
+                    split_probabilities=hpo_split_cache,
+                )
+        except Exception:
+            pass
+
+    for method_name, method_split_cache in calibration_candidate_split_probabilities.items():
+        if method_name == "none":
+            continue
+        candidate_id = f"calibration_{method_name}"
+        candidate_split_probabilities[candidate_id] = method_split_cache
+        candidate_metrics[candidate_id] = _score_val_test_from_split_probabilities(
+            gender_key=gender_key,
+            split_probabilities=method_split_cache,
+        )
+
+    baseline_cache = candidate_split_probabilities.get("baseline", {})
+    hpo_cache = candidate_split_probabilities.get("hpo_best", {})
+    baseline_val = np.asarray(baseline_cache.get("Val", {}).get("y_prob", np.asarray([], dtype=float)), dtype=float)
+    baseline_test = np.asarray(baseline_cache.get("Test", {}).get("y_prob", np.asarray([], dtype=float)), dtype=float)
+    hpo_val = np.asarray(hpo_cache.get("Val", {}).get("y_prob", np.asarray([], dtype=float)), dtype=float)
+    hpo_test = np.asarray(hpo_cache.get("Test", {}).get("y_prob", np.asarray([], dtype=float)), dtype=float)
+    val_true = np.asarray(baseline_cache.get("Val", {}).get("y_true", np.asarray([], dtype=float)), dtype=float)
+    test_true = np.asarray(baseline_cache.get("Test", {}).get("y_true", np.asarray([], dtype=float)), dtype=float)
+
+    if (
+        baseline_val.shape == hpo_val.shape
+        and baseline_test.shape == hpo_test.shape
+        and val_true.shape == baseline_val.shape
+        and test_true.shape == baseline_test.shape
+        and baseline_val.shape[0] > 0
+    ):
+        weighted_candidates: list[tuple[float, dict[str, Any], dict[str, dict[str, np.ndarray]]]] = []
+        for baseline_weight in ENSEMBLE_WEIGHT_GRID:
+            hpo_weight = 1.0 - float(baseline_weight)
+            blended_val = np.clip(float(baseline_weight) * baseline_val + hpo_weight * hpo_val, 0.0, 1.0)
+            blended_test = np.clip(float(baseline_weight) * baseline_test + hpo_weight * hpo_test, 0.0, 1.0)
+            split_cache = {
+                "Val": {"y_true": val_true, "y_prob": blended_val},
+                "Test": {"y_true": test_true, "y_prob": blended_test},
+            }
+            metrics = _score_val_test_from_split_probabilities(
+                gender_key=gender_key,
+                split_probabilities=split_cache,
+            )
+            val_brier = _as_float_or_none(metrics.get("val", {}).get("brier"))
+            if val_brier is not None:
+                weighted_candidates.append((val_brier, metrics, split_cache))
+
+        if weighted_candidates:
+            _, best_weighted_metrics, best_weighted_cache = min(
+                weighted_candidates,
+                key=lambda item: float(item[0]),
+            )
+            candidate_split_probabilities["ensemble_weighted"] = best_weighted_cache
+            candidate_metrics["ensemble_weighted"] = best_weighted_metrics
+
+    available_candidate_ids = [
+        candidate_id
+        for candidate_id, payload in candidate_metrics.items()
+        if isinstance(payload, dict)
+        and isinstance(payload.get("val", {}).get("brier"), (int, float))
+        and isinstance(payload.get("test", {}).get("brier"), (int, float))
+    ]
+
+    diversity_by_split: dict[str, Any] = {}
+    for split_label in ("Val", "Test"):
+        pairwise_rows: list[dict[str, Any]] = []
+        correlations: list[float] = []
+        for idx, left_id in enumerate(available_candidate_ids):
+            left_prob = np.asarray(
+                candidate_split_probabilities.get(left_id, {}).get(split_label, {}).get("y_prob", np.asarray([], dtype=float)),
+                dtype=float,
+            )
+            for right_id in available_candidate_ids[idx + 1 :]:
+                right_prob = np.asarray(
+                    candidate_split_probabilities.get(right_id, {}).get(split_label, {}).get("y_prob", np.asarray([], dtype=float)),
+                    dtype=float,
+                )
+                corr = _safe_probability_correlation(left_prob, right_prob)
+                pairwise_rows.append(
+                    {
+                        "left_candidate_id": left_id,
+                        "right_candidate_id": right_id,
+                        "correlation": corr,
+                    }
+                )
+                if isinstance(corr, (int, float)):
+                    correlations.append(float(corr))
+
+        diversity_by_split[split_label.lower()] = {
+            "pairwise_correlations": pairwise_rows,
+            "mean_correlation": float(np.mean(correlations)) if correlations else None,
+            "min_correlation": float(np.min(correlations)) if correlations else None,
+        }
+
+    stacking_candidate: dict[str, Any] = {
+        "status": "skipped",
+        "reason": "insufficient_candidate_matrix",
+        "candidate_id": "stacking_logreg",
+        "meta_model": "logistic_regression",
+        "feature_candidate_ids": available_candidate_ids,
+        "feature_count": int(len(available_candidate_ids)),
+        "val_sample_count": int(val_true.shape[0]),
+        "metrics": {"val": {}, "test": {}},
+        "coef_by_candidate": {},
+        "intercept": None,
+    }
+
+    if len(available_candidate_ids) >= 2 and val_true.shape[0] >= STACKING_POLICY_MIN_VAL_SAMPLES and np.unique(val_true).shape[0] >= 2:
+        X_val = np.column_stack(
+            [
+                np.asarray(
+                    candidate_split_probabilities[candidate_id]["Val"]["y_prob"],
+                    dtype=float,
+                )
+                for candidate_id in available_candidate_ids
+            ]
+        )
+        X_test = np.column_stack(
+            [
+                np.asarray(
+                    candidate_split_probabilities[candidate_id]["Test"]["y_prob"],
+                    dtype=float,
+                )
+                for candidate_id in available_candidate_ids
+            ]
+        )
+        try:
+            meta_model = LogisticRegression(random_state=0, solver="lbfgs", max_iter=200)
+            meta_model.fit(X_val, val_true)
+            val_prob = meta_model.predict_proba(X_val)[:, 1]
+            test_prob = meta_model.predict_proba(X_test)[:, 1]
+            split_cache = {
+                "Val": {"y_true": val_true, "y_prob": val_prob},
+                "Test": {"y_true": test_true, "y_prob": test_prob},
+            }
+            stacking_metrics = _score_val_test_from_split_probabilities(
+                gender_key=gender_key,
+                split_probabilities=split_cache,
+            )
+            stacking_candidate = {
+                "status": "available",
+                "reason": None,
+                "candidate_id": "stacking_logreg",
+                "meta_model": "logistic_regression",
+                "feature_candidate_ids": available_candidate_ids,
+                "feature_count": int(len(available_candidate_ids)),
+                "val_sample_count": int(val_true.shape[0]),
+                "metrics": {
+                    "val": stacking_metrics.get("val", {}),
+                    "test": stacking_metrics.get("test", {}),
+                },
+                "coef_by_candidate": {
+                    candidate_id: float(meta_model.coef_[0][idx])
+                    for idx, candidate_id in enumerate(available_candidate_ids)
+                },
+                "intercept": float(meta_model.intercept_[0]),
+            }
+        except Exception as exc:
+            stacking_candidate["status"] = "failed"
+            stacking_candidate["reason"] = f"meta_fit_failed:{exc.__class__.__name__}"
+    elif len(available_candidate_ids) >= 2 and val_true.shape[0] > 0:
+        stacking_candidate["reason"] = "insufficient_val_samples"
+
+    best_existing_candidate_id = None
+    best_existing_val_brier = None
+    best_existing_test_brier = None
+    if available_candidate_ids:
+        best_existing_candidate_id = min(
+            available_candidate_ids,
+            key=lambda candidate_id: float(candidate_metrics[candidate_id]["val"]["brier"]),
+        )
+        best_existing_val_brier = _as_float_or_none(candidate_metrics[best_existing_candidate_id]["val"].get("brier"))
+        best_existing_test_brier = _as_float_or_none(candidate_metrics[best_existing_candidate_id]["test"].get("brier"))
+
+    stacking_val_brier = _as_float_or_none(stacking_candidate.get("metrics", {}).get("val", {}).get("brier"))
+    stacking_test_brier = _as_float_or_none(stacking_candidate.get("metrics", {}).get("test", {}).get("brier"))
+    delta_vs_best_existing = _safe_delta(stacking_test_brier, best_existing_test_brier)
+    delta_vs_baseline = _safe_delta(
+        stacking_test_brier,
+        _as_float_or_none(candidate_metrics.get("baseline", {}).get("test", {}).get("brier")),
+    )
+
+    if stacking_candidate.get("status") != "available":
+        research_decision = "insufficient_data"
+        research_reason = stacking_candidate.get("reason")
+    elif (
+        isinstance(stacking_val_brier, (int, float))
+        and isinstance(best_existing_val_brier, (int, float))
+        and stacking_val_brier <= best_existing_val_brier - STACKING_POLICY_MIN_IMPROVEMENT
+        and isinstance(delta_vs_best_existing, (int, float))
+        and delta_vs_best_existing <= ENSEMBLE_MAX_TEST_BRIER_DEGRADATION
+    ):
+        research_decision = "promising"
+        research_reason = "improves_val_without_test_degradation"
+    else:
+        research_decision = "not_promising"
+        research_reason = "no_clear_val_test_edge"
+
+    return {
+        "status": "passed",
+        "reason": None,
+        "candidate_ids": available_candidate_ids,
+        "candidate_metrics": {
+            candidate_id: {
+                "val": candidate_metrics[candidate_id].get("val", {}),
+                "test": candidate_metrics[candidate_id].get("test", {}),
+            }
+            for candidate_id in available_candidate_ids
+        },
+        "diversity": diversity_by_split,
+        "stacking_candidate": stacking_candidate,
+        "benchmark": {
+            "best_existing_candidate_id": best_existing_candidate_id,
+            "best_existing_val_brier": best_existing_val_brier,
+            "best_existing_test_brier": best_existing_test_brier,
+            "stacking_test_brier_delta_vs_best_existing": delta_vs_best_existing,
+            "stacking_test_brier_delta_vs_baseline": delta_vs_baseline,
+        },
+        "research_decision": research_decision,
+        "research_reason": research_reason,
+    }
+
+
+def _build_stacking_policy_report(
+    *,
+    context: dict[str, Any],
+    train_result: dict[str, Any],
+    train_module: Any,
+    feature_frames_by_gender: dict[str, pd.DataFrame],
+    split_probabilities: dict[str, dict[str, dict[str, np.ndarray]]],
+    calibration_candidate_split_probabilities_by_gender: dict[str, dict[str, dict[str, dict[str, np.ndarray]]]],
+) -> dict[str, Any]:
+    hpo_payload = train_result.get("hpo", {}) if isinstance(train_result, dict) else {}
+    hpo_target_profile = str(hpo_payload.get("target_profile", "quality_v1"))
+
+    hpo_report_by_gender: dict[str, Any] = {}
+    report_path_value = hpo_payload.get("report_json") if isinstance(hpo_payload, dict) else None
+    if isinstance(report_path_value, str) and report_path_value.strip():
+        hpo_report_path = Path(report_path_value)
+        if hpo_report_path.exists():
+            try:
+                hpo_report_payload = json.loads(hpo_report_path.read_text(encoding="utf-8"))
+            except Exception:
+                hpo_report_payload = {}
+            by_gender_payload = hpo_report_payload.get("by_gender", {}) if isinstance(hpo_report_payload, dict) else {}
+            if isinstance(by_gender_payload, dict):
+                hpo_report_by_gender = by_gender_payload
+
+    by_gender = {
+        gender_key: _build_stacking_policy_report_for_gender(
+            context=context,
+            train_module=train_module,
+            gender_key=gender_key,
+            feature_df=feature_frames_by_gender.get(gender_key, pd.DataFrame()),
+            baseline_split_probabilities=split_probabilities.get(gender_key, {}),
+            hpo_gender_payload=hpo_report_by_gender.get(gender_key, {}),
+            hpo_target_profile=hpo_target_profile,
+            calibration_candidate_split_probabilities=calibration_candidate_split_probabilities_by_gender.get(
+                gender_key, {}
+            ),
+        )
+        for gender_key in ("men", "women")
+    }
+
+    promising_genders = [
+        gender_key
+        for gender_key, payload in by_gender.items()
+        if isinstance(payload, dict) and payload.get("research_decision") == "promising"
+    ]
+    aggregate_decision = "research_stacking_candidate" if promising_genders else "hold_current_policy"
+
+    report_payload = {
+        "run_id": context.get("run_id"),
+        "seed": context.get("seed"),
+        "generated_at": _now_utc_iso(),
+        "policy_name": "stacking_policy_research_v1",
+        "config": {
+            "min_val_samples": STACKING_POLICY_MIN_VAL_SAMPLES,
+            "min_improvement": STACKING_POLICY_MIN_IMPROVEMENT,
+            "meta_model": "logistic_regression",
+            "candidate_pool": [
+                "baseline",
+                "hpo_best",
+                "ensemble_weighted",
+                "calibration_platt",
+                "calibration_isotonic",
+            ],
+        },
+        "by_gender": by_gender,
+        "aggregate": {
+            "decision": aggregate_decision,
+            "promising_genders": promising_genders,
+        },
+    }
+
+    report_path = Path(context["run_dir"]) / "stacking_policy_report.json"
+    _write_json(report_path, report_payload)
+
+    return {
+        "report_json": str(report_path),
+        "policy_name": report_payload["policy_name"],
+        "config": report_payload["config"],
+        "by_gender": {
+            gender_key: {
+                "status": payload.get("status"),
+                "research_decision": payload.get("research_decision"),
+                "research_reason": payload.get("research_reason"),
+                "best_existing_candidate_id": payload.get("benchmark", {}).get("best_existing_candidate_id"),
+                "stacking_candidate_status": payload.get("stacking_candidate", {}).get("status"),
+                "stacking_test_brier_delta_vs_best_existing": payload.get("benchmark", {}).get(
+                    "stacking_test_brier_delta_vs_best_existing"
+                ),
+            }
+            for gender_key, payload in by_gender.items()
+        },
+        "aggregate": report_payload["aggregate"],
+    }
+
+
+def _build_alternative_model_report_for_gender(
+    *,
+    context: dict[str, Any],
+    gender_key: str,
+    feature_df: pd.DataFrame,
+    baseline_split_probabilities: dict[str, dict[str, np.ndarray]],
+    feature_columns: list[str],
+) -> dict[str, Any]:
+    baseline_scores = _score_val_test_from_split_probabilities(
+        gender_key=gender_key,
+        split_probabilities=baseline_split_probabilities,
+    )
+    baseline_val_brier = _as_float_or_none(baseline_scores.get("val", {}).get("brier"))
+    baseline_test_brier = _as_float_or_none(baseline_scores.get("test", {}).get("brier"))
+
+    candidates: list[dict[str, Any]] = [
+        {
+            "candidate_id": "baseline",
+            "model_family": "train_stage_model",
+            "status": "available" if baseline_val_brier is not None else "failed",
+            "reason": None if baseline_val_brier is not None else "missing_val_brier",
+            "weights": None,
+            "metrics": {
+                "val": baseline_scores.get("val", {}),
+                "test": baseline_scores.get("test", {}),
+                "val_brier": baseline_val_brier,
+                "test_brier": baseline_test_brier,
+            },
+        }
+    ]
+
+    available_feature_columns = [column for column in feature_columns if column in feature_df.columns]
+    alternative_specs = (
+        ("histgb_benchmark", "hist_gradient_boosting", _fit_histgb_candidate_split_probabilities),
+        ("logistic_benchmark", "logistic_regression", _fit_logistic_candidate_split_probabilities),
+        ("spline_logistic_benchmark", "spline_logistic_gam_like", _fit_spline_logistic_candidate_split_probabilities),
+        ("xgboost_benchmark", "xgboost", _fit_xgboost_candidate_split_probabilities),
+        ("catboost_benchmark", "catboost", _fit_catboost_candidate_split_probabilities),
+        ("tabpfn_benchmark", "tabpfn", _fit_tabpfn_candidate_split_probabilities),
+    )
+    alternative_split_caches: dict[str, dict[str, dict[str, np.ndarray]]] = {}
+    diversity: dict[str, Any] = {"val": {}, "test": {}}
+    baseline_val_prob = np.asarray(
+        baseline_split_probabilities.get("Val", {}).get("y_prob", np.asarray([], dtype=float)),
+        dtype=float,
+    )
+    baseline_test_prob = np.asarray(
+        baseline_split_probabilities.get("Test", {}).get("y_prob", np.asarray([], dtype=float)),
+        dtype=float,
+    )
+    val_true = np.asarray(
+        baseline_split_probabilities.get("Val", {}).get("y_true", np.asarray([], dtype=float)),
+        dtype=float,
+    )
+    test_true = np.asarray(
+        baseline_split_probabilities.get("Test", {}).get("y_true", np.asarray([], dtype=float)),
+        dtype=float,
+    )
+
+    for candidate_id, model_family, fit_fn in alternative_specs:
+        alt_split_cache, alt_reason = fit_fn(
+            context=context,
+            gender_key=gender_key,
+            feature_df=feature_df,
+            feature_columns=feature_columns,
+        )
+        if alt_split_cache is None:
+            candidates.append(
+                {
+                    "candidate_id": candidate_id,
+                    "model_family": model_family,
+                    "status": "skipped" if alt_reason in {"insufficient_split_rows", "single_class_train_target", "xgboost_unavailable", "catboost_unavailable", "tabpfn_unavailable", "tabpfn_weights_missing"} else "failed",
+                    "reason": alt_reason,
+                    "weights": None,
+                    "metrics": {"val": {}, "test": {}, "val_brier": None, "test_brier": None},
+                }
+            )
+            continue
+
+        alternative_split_caches[candidate_id] = alt_split_cache
+        alt_scores = _score_val_test_from_split_probabilities(
+            gender_key=gender_key,
+            split_probabilities=alt_split_cache,
+        )
+        alt_val_brier = _as_float_or_none(alt_scores.get("val", {}).get("brier"))
+        alt_test_brier = _as_float_or_none(alt_scores.get("test", {}).get("brier"))
+        candidates.append(
+            {
+                "candidate_id": candidate_id,
+                "model_family": model_family,
+                "status": "available" if alt_val_brier is not None else "failed",
+                "reason": None if alt_val_brier is not None else "missing_val_brier",
+                "weights": None,
+                "metrics": {
+                    "val": alt_scores.get("val", {}),
+                    "test": alt_scores.get("test", {}),
+                    "val_brier": alt_val_brier,
+                    "test_brier": alt_test_brier,
+                },
+            }
+        )
+
+        for split_label in ("Val", "Test"):
+            baseline_prob = np.asarray(
+                baseline_split_probabilities.get(split_label, {}).get("y_prob", np.asarray([], dtype=float)),
+                dtype=float,
+            )
+            alt_prob = np.asarray(
+                alt_split_cache.get(split_label, {}).get("y_prob", np.asarray([], dtype=float)),
+                dtype=float,
+            )
+            split_key = split_label.lower()
+            diversity.setdefault(split_key, {})
+            diversity[split_key][f"baseline_vs_{candidate_id}_correlation"] = _safe_probability_correlation(
+                baseline_prob,
+                alt_prob,
+            )
+            diversity[split_key]["sample_count"] = int(baseline_prob.shape[0]) if baseline_prob.shape == alt_prob.shape else 0
+
+    available_alt_ids = list(alternative_split_caches.keys())
+    for split_label in ("Val", "Test"):
+        split_key = split_label.lower()
+        for idx, left_id in enumerate(available_alt_ids):
+            left_prob = np.asarray(
+                alternative_split_caches[left_id].get(split_label, {}).get("y_prob", np.asarray([], dtype=float)),
+                dtype=float,
+            )
+            for right_id in available_alt_ids[idx + 1 :]:
+                right_prob = np.asarray(
+                    alternative_split_caches[right_id].get(split_label, {}).get("y_prob", np.asarray([], dtype=float)),
+                    dtype=float,
+                )
+                diversity.setdefault(split_key, {})
+                diversity[split_key][f"{left_id}_vs_{right_id}_correlation"] = _safe_probability_correlation(
+                    left_prob,
+                    right_prob,
+                )
+
+    model_probabilities = {
+        "baseline": {
+            "Val": baseline_val_prob,
+            "Test": baseline_test_prob,
+        }
+    }
+    for candidate_id, alt_split_cache in alternative_split_caches.items():
+        model_probabilities[candidate_id] = {
+            "Val": np.asarray(alt_split_cache.get("Val", {}).get("y_prob", np.asarray([], dtype=float)), dtype=float),
+            "Test": np.asarray(alt_split_cache.get("Test", {}).get("y_prob", np.asarray([], dtype=float)), dtype=float),
+        }
+
+    def _weight_grid_for_combo(combo_size: int) -> list[dict[str, float]]:
+        if combo_size == 3:
+            return [
+                {"w1": 0.5, "w2": 0.25, "w3": 0.25},
+                {"w1": 0.25, "w2": 0.5, "w3": 0.25},
+                {"w1": 0.25, "w2": 0.25, "w3": 0.5},
+                {"w1": 1.0 / 3.0, "w2": 1.0 / 3.0, "w3": 1.0 / 3.0},
+                {"w1": 0.4, "w2": 0.4, "w3": 0.2},
+                {"w1": 0.4, "w2": 0.2, "w3": 0.4},
+                {"w1": 0.2, "w2": 0.4, "w3": 0.4},
+            ]
+        return []
+
+    def _candidate_label_from_model_ids(model_ids: tuple[str, ...]) -> str:
+        readable_ids = [model_id.replace("_benchmark", "") for model_id in model_ids]
+        return "_".join(readable_ids) + "_blend"
+
+    def _evaluate_combo_candidate(model_ids: tuple[str, ...]) -> dict[str, Any] | None:
+        if any(
+            model_probabilities[model_id]["Val"].shape != baseline_val_prob.shape
+            or model_probabilities[model_id]["Test"].shape != baseline_test_prob.shape
+            for model_id in model_ids
+        ):
+            return None
+        if baseline_val_prob.shape[0] == 0 or val_true.shape != baseline_val_prob.shape or test_true.shape != baseline_test_prob.shape:
+            return None
+
+        combo_size = len(model_ids)
+        blend_rows: list[dict[str, Any]] = []
+        if combo_size == 2:
+            left_id, right_id = model_ids
+            for left_weight in ALTERNATIVE_MODEL_WEIGHT_GRID:
+                weights = {
+                    left_id: float(left_weight),
+                    right_id: float(1.0 - float(left_weight)),
+                }
+                blended_val = np.clip(
+                    weights[left_id] * model_probabilities[left_id]["Val"] + weights[right_id] * model_probabilities[right_id]["Val"],
+                    0.0,
+                    1.0,
+                )
+                blended_test = np.clip(
+                    weights[left_id] * model_probabilities[left_id]["Test"] + weights[right_id] * model_probabilities[right_id]["Test"],
+                    0.0,
+                    1.0,
+                )
+                val_metrics = _score_probability_bundle(gender_key=gender_key, split_label="Val", y_true=val_true, y_prob=blended_val)
+                test_metrics = _score_probability_bundle(gender_key=gender_key, split_label="Test", y_true=test_true, y_prob=blended_test)
+                blend_rows.append(
+                    {
+                        "weights": weights,
+                        "val": val_metrics,
+                        "test": test_metrics,
+                        "val_brier": _as_float_or_none(val_metrics.get("brier")),
+                        "test_brier": _as_float_or_none(test_metrics.get("brier")),
+                    }
+                )
+        elif combo_size == 3:
+            for template in _weight_grid_for_combo(3):
+                weights = {
+                    model_ids[0]: float(template["w1"]),
+                    model_ids[1]: float(template["w2"]),
+                    model_ids[2]: float(template["w3"]),
+                }
+                blended_val = np.clip(
+                    sum(weights[mid] * model_probabilities[mid]["Val"] for mid in model_ids),
+                    0.0,
+                    1.0,
+                )
+                blended_test = np.clip(
+                    sum(weights[mid] * model_probabilities[mid]["Test"] for mid in model_ids),
+                    0.0,
+                    1.0,
+                )
+                val_metrics = _score_probability_bundle(gender_key=gender_key, split_label="Val", y_true=val_true, y_prob=blended_val)
+                test_metrics = _score_probability_bundle(gender_key=gender_key, split_label="Test", y_true=test_true, y_prob=blended_test)
+                blend_rows.append(
+                    {
+                        "weights": weights,
+                        "val": val_metrics,
+                        "test": test_metrics,
+                        "val_brier": _as_float_or_none(val_metrics.get("brier")),
+                        "test_brier": _as_float_or_none(test_metrics.get("brier")),
+                    }
+                )
+        else:
+            return None
+
+        valid_blends = [row for row in blend_rows if isinstance(row.get("val_brier"), (int, float))]
+        if not valid_blends:
+            return None
+
+        best_blend = min(
+            valid_blends,
+            key=lambda row: (
+                float(row["val_brier"]),
+                sum(abs(row["weights"].get(model_id, 0.0) - (1.0 / combo_size)) for model_id in model_ids),
+            ),
+        )
+        return {
+            "candidate_id": _candidate_label_from_model_ids(model_ids),
+            "model_family": "blended_research_candidate",
+            "status": "available",
+            "reason": None,
+            "weights": best_blend["weights"],
+            "metrics": {
+                "val": best_blend["val"],
+                "test": best_blend["test"],
+                "val_brier": best_blend["val_brier"],
+                "test_brier": best_blend["test_brier"],
+            },
+        }
+
+    available_model_ids = list(model_probabilities.keys())
+    for combo_size in (2, 3):
+        for combo in combinations(available_model_ids, combo_size):
+            candidate = _evaluate_combo_candidate(combo)
+            if candidate is not None:
+                candidates.append(candidate)
+
+    available_candidates = [
+        row
+        for row in candidates
+        if row.get("status") == "available" and isinstance(row.get("metrics", {}).get("val_brier"), (int, float))
+    ]
+
+    best_candidate_id = None
+    best_val_brier = None
+    best_test_brier = None
+    selected_candidate_weights = None
+    decision = "insufficient_data"
+    decision_reason = "no_available_candidates"
+
+    if available_candidates:
+        best_candidate = min(
+            available_candidates,
+            key=lambda row: (
+                float(row.get("metrics", {}).get("val_brier")),
+                row.get("candidate_id") != "baseline_histgb_blend",
+                row.get("candidate_id") != "histgb_benchmark",
+            ),
+        )
+        best_candidate_id = best_candidate.get("candidate_id")
+        best_val_brier = _as_float_or_none(best_candidate.get("metrics", {}).get("val_brier"))
+        best_test_brier = _as_float_or_none(best_candidate.get("metrics", {}).get("test_brier"))
+        selected_candidate_weights = best_candidate.get("weights")
+
+        if best_candidate_id == "baseline":
+            decision = "hold_current_model_family"
+            decision_reason = "baseline_remains_best"
+        else:
+            val_improvement = (
+                float(baseline_val_brier - best_val_brier)
+                if isinstance(baseline_val_brier, (int, float)) and isinstance(best_val_brier, (int, float))
+                else None
+            )
+            test_delta = (
+                float(best_test_brier - baseline_test_brier)
+                if isinstance(best_test_brier, (int, float)) and isinstance(baseline_test_brier, (int, float))
+                else None
+            )
+            if (
+                isinstance(val_improvement, (int, float))
+                and val_improvement >= ALTERNATIVE_MODEL_MIN_VAL_IMPROVEMENT
+                and (test_delta is None or test_delta <= ENSEMBLE_MAX_TEST_BRIER_DEGRADATION)
+            ):
+                decision = "promising_diversity_candidate"
+                decision_reason = "improves_val_without_test_degradation"
+            else:
+                decision = "not_promising"
+                decision_reason = "no_clear_val_test_edge"
+
+    return {
+        "status": "passed",
+        "reason": None,
+        "feature_count": int(len(available_feature_columns)),
+        "candidates": candidates,
+        "diversity": diversity,
+        "benchmark": {
+            "baseline_val_brier": baseline_val_brier,
+            "baseline_test_brier": baseline_test_brier,
+            "best_candidate_id": best_candidate_id,
+            "best_val_brier": best_val_brier,
+            "best_test_brier": best_test_brier,
+            "best_test_brier_delta_vs_baseline": _safe_delta(best_test_brier, baseline_test_brier),
+        },
+        "selection": {
+            "selected_candidate_id": best_candidate_id,
+            "selected_candidate_weights": selected_candidate_weights,
+            "selected_val_brier_delta_vs_baseline": _safe_delta(best_val_brier, baseline_val_brier),
+            "selected_test_brier_delta_vs_baseline": _safe_delta(best_test_brier, baseline_test_brier),
+        },
+        "research_decision": decision,
+        "research_reason": decision_reason,
+    }
+
+
+def _build_alternative_model_report(
+    *,
+    context: dict[str, Any],
+    genders_payload: dict[str, Any],
+    feature_frames_by_gender: dict[str, pd.DataFrame],
+    split_probabilities: dict[str, dict[str, dict[str, np.ndarray]]],
+) -> dict[str, Any]:
+    by_gender = {
+        gender_key: _build_alternative_model_report_for_gender(
+            context=context,
+            gender_key=gender_key,
+            feature_df=feature_frames_by_gender.get(gender_key, pd.DataFrame()),
+            baseline_split_probabilities=split_probabilities.get(gender_key, {}),
+            feature_columns=(
+                genders_payload.get(gender_key, {}).get("feature_snapshot", {}).get("feature_columns", [])
+                if isinstance(genders_payload.get(gender_key, {}), dict)
+                else []
+            ),
+        )
+        for gender_key in ("men", "women")
+    }
+
+    promising_genders = [
+        gender_key
+        for gender_key, payload in by_gender.items()
+        if isinstance(payload, dict) and payload.get("research_decision") == "promising_diversity_candidate"
+    ]
+    candidate_ready_genders = [
+        gender_key
+        for gender_key, payload in by_gender.items()
+        if isinstance(payload, dict)
+        and payload.get("research_decision") == "promising_diversity_candidate"
+        and payload.get("selection", {}).get("selected_candidate_id") == "baseline_histgb_blend"
+    ]
+
+    report_payload = {
+        "run_id": context.get("run_id"),
+        "seed": context.get("seed"),
+        "generated_at": _now_utc_iso(),
+        "policy_name": "alternative_model_benchmark_v1",
+        "config": {
+            "model_family": "multi_family_benchmark",
+            "candidate_model_families": [
+                "hist_gradient_boosting",
+                "logistic_regression",
+                "spline_logistic_gam_like",
+                "xgboost",
+                "catboost",
+                "tabpfn",
+            ],
+            "weight_grid": list(ALTERNATIVE_MODEL_WEIGHT_GRID),
+            "triple_weight_templates": [
+                [0.5, 0.25, 0.25],
+                [0.25, 0.5, 0.25],
+                [0.25, 0.25, 0.5],
+                [1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0],
+                [0.4, 0.4, 0.2],
+                [0.4, 0.2, 0.4],
+                [0.2, 0.4, 0.4],
+            ],
+            "min_val_improvement": ALTERNATIVE_MODEL_MIN_VAL_IMPROVEMENT,
+            "train_split": "Train",
+            "evaluation_splits": ["Val", "Test"],
+        },
+        "by_gender": by_gender,
+        "aggregate": {
+            "decision": "research_followup_alternative_model" if promising_genders else "hold_current_model_family",
+            "promising_genders": promising_genders,
+            "candidate_ready_genders": candidate_ready_genders,
+        },
+    }
+
+    report_path = Path(context["run_dir"]) / "alternative_model_report.json"
+    _write_json(report_path, report_payload)
+
+    return {
+        "report_json": str(report_path),
+        "policy_name": report_payload["policy_name"],
+        "config": report_payload["config"],
+        "by_gender": {
+            gender_key: {
+                "status": payload.get("status"),
+                "research_decision": payload.get("research_decision"),
+                "research_reason": payload.get("research_reason"),
+                "best_candidate_id": payload.get("benchmark", {}).get("best_candidate_id"),
+                "selected_candidate_weights": payload.get("selection", {}).get("selected_candidate_weights"),
+                "selected_val_brier_delta_vs_baseline": payload.get("selection", {}).get(
+                    "selected_val_brier_delta_vs_baseline"
+                ),
+                "best_test_brier_delta_vs_baseline": payload.get("benchmark", {}).get(
+                    "best_test_brier_delta_vs_baseline"
+                ),
+                "candidates": payload.get("candidates"),
+            }
+            for gender_key, payload in by_gender.items()
+        },
+        "aggregate": report_payload["aggregate"],
+    }
+
+
+def _build_men_combo_followup_report(
+    *,
+    context: dict[str, Any],
+    feature_df: pd.DataFrame,
+    feature_columns: list[str],
+    baseline_split_probabilities: dict[str, dict[str, np.ndarray]],
+    alternative_model_payload: dict[str, Any],
+) -> dict[str, Any]:
+    men_payload = (
+        alternative_model_payload.get("by_gender", {}).get("men", {})
+        if isinstance(alternative_model_payload.get("by_gender", {}), dict)
+        else {}
+    )
+    candidate_rows = men_payload.get("candidates", []) if isinstance(men_payload.get("candidates", []), list) else []
+    shortlisted_ids = [
+        "baseline_histgb_blend",
+        "baseline_histgb_xgboost_blend",
+        "baseline_histgb_catboost_blend",
+        "baseline_xgboost_blend",
+        "xgboost_catboost_blend",
+    ]
+
+    baseline_scores = _score_val_test_from_split_probabilities(
+        gender_key="men",
+        split_probabilities=baseline_split_probabilities,
+    )
+    baseline_test_metrics = baseline_scores.get("test", {})
+    feature_columns = [column for column in feature_columns if column in feature_df.columns]
+    alt_split_caches, alt_reasons = _fit_available_alternative_model_split_caches(
+        context=context,
+        gender_key="men",
+        feature_df=feature_df,
+        feature_columns=feature_columns,
+    )
+    component_split_probabilities = {"baseline": baseline_split_probabilities, **alt_split_caches}
+
+    candidates: list[dict[str, Any]] = []
+    for candidate_id in shortlisted_ids:
+        candidate_row = next(
+            (row for row in candidate_rows if isinstance(row, dict) and row.get("candidate_id") == candidate_id),
+            None,
+        )
+        if not isinstance(candidate_row, dict):
+            candidates.append({"candidate_id": candidate_id, "status": "skipped", "reason": "candidate_unavailable"})
+            continue
+
+        weights = candidate_row.get("weights", {})
+        split_cache, build_reason = _build_weighted_split_probabilities(
+            component_split_probabilities=component_split_probabilities,
+            weights=weights,
+        )
+        if split_cache is None:
+            candidates.append(
+                {
+                    "candidate_id": candidate_id,
+                    "status": "failed",
+                    "reason": build_reason,
+                    "weights": weights,
+                }
+            )
+            continue
+
+        raw_scores = _score_val_test_from_split_probabilities(
+            gender_key="men",
+            split_probabilities=split_cache,
+        )
+        val_true = np.asarray(split_cache.get("Val", {}).get("y_true", np.asarray([], dtype=float)), dtype=float)
+        val_prob = np.asarray(split_cache.get("Val", {}).get("y_prob", np.asarray([], dtype=float)), dtype=float)
+        test_true = np.asarray(split_cache.get("Test", {}).get("y_true", np.asarray([], dtype=float)), dtype=float)
+        test_prob = np.asarray(split_cache.get("Test", {}).get("y_prob", np.asarray([], dtype=float)), dtype=float)
+        calibration_policy = _build_calibration_policy_for_gender(
+            gender_key="men",
+            val_true=val_true,
+            val_prob=val_prob,
+            test_true=test_true,
+            test_prob=test_prob,
+            regime_summary={},
+            drift_alerts=[],
+        )
+        selected_test_metrics = (
+            calibration_policy.get("selected_test_metrics", {})
+            if isinstance(calibration_policy.get("selected_test_metrics", {}), dict)
+            else {}
+        )
+        candidates.append(
+            {
+                "candidate_id": candidate_id,
+                "status": "available",
+                "reason": None,
+                "weights": weights,
+                "raw_metrics": {
+                    "val": raw_scores.get("val", {}),
+                    "test": raw_scores.get("test", {}),
+                },
+                "raw_local_gate_check": _local_gate_check(
+                    candidate_test_metrics=raw_scores.get("test", {}),
+                    baseline_test_metrics=baseline_test_metrics,
+                ),
+                "calibration_policy": {
+                    "selected_method": calibration_policy.get("selected_method"),
+                    "selection_reason": calibration_policy.get("selection_reason"),
+                    "selected_test_metrics": selected_test_metrics,
+                    "candidate_methods": calibration_policy.get("candidate_methods"),
+                },
+                "calibrated_local_gate_check": _local_gate_check(
+                    candidate_test_metrics=selected_test_metrics,
+                    baseline_test_metrics=baseline_test_metrics,
+                ),
+            }
+        )
+
+    available_candidates = [row for row in candidates if row.get("status") == "available"]
+    gate_ready_candidates = [
+        row for row in available_candidates if row.get("calibrated_local_gate_check", {}).get("status") == "passed"
+    ]
+
+    selected_candidate = None
+    research_decision = "insufficient_data"
+    research_reason = "no_available_candidates"
+    if gate_ready_candidates:
+        selected_candidate = min(
+            gate_ready_candidates,
+            key=lambda row: float(row.get("raw_metrics", {}).get("val", {}).get("brier", float("inf"))),
+        )
+        research_decision = "promising_local_gate_candidate"
+        research_reason = "shortlisted_candidate_clears_local_gate_after_calibration"
+    elif available_candidates:
+        selected_candidate = min(
+            available_candidates,
+            key=lambda row: (
+                float(row.get("raw_metrics", {}).get("val", {}).get("brier", float("inf"))),
+                row.get("candidate_id") != "baseline_histgb_blend",
+            ),
+        )
+        research_decision = "hold_current_combo_shortlist"
+        research_reason = "no_shortlisted_candidate_clears_local_gate"
+
+    report_payload = {
+        "run_id": context.get("run_id"),
+        "seed": context.get("seed"),
+        "generated_at": _now_utc_iso(),
+        "policy_name": "men_combo_followup_v1",
+        "shortlisted_candidate_ids": shortlisted_ids,
+        "baseline_test_metrics": baseline_test_metrics,
+        "alt_model_availability": alt_reasons,
+        "candidates": candidates,
+        "selected_candidate_id": selected_candidate.get("candidate_id") if isinstance(selected_candidate, dict) else None,
+        "research_decision": research_decision,
+        "research_reason": research_reason,
+    }
+    report_path = Path(context["run_dir"]) / "men_combo_followup_report.json"
+    _write_json(report_path, report_payload)
+    return {
+        "report_json": str(report_path),
+        "policy_name": report_payload["policy_name"],
+        "selected_candidate_id": report_payload["selected_candidate_id"],
+        "research_decision": report_payload["research_decision"],
+        "research_reason": report_payload["research_reason"],
+    }
+
+
+def _build_men_tabpfn_followup_report(
+    *,
+    context: dict[str, Any],
+    feature_df: pd.DataFrame,
+    feature_columns: list[str],
+    baseline_split_probabilities: dict[str, dict[str, np.ndarray]],
+    alternative_model_payload: dict[str, Any],
+) -> dict[str, Any]:
+    alternative_by_gender = (
+        alternative_model_payload.get("by_gender", {})
+        if isinstance(alternative_model_payload.get("by_gender", {}), dict)
+        else {}
+    )
+    men_payload = alternative_by_gender.get("men", {}) if isinstance(alternative_by_gender.get("men", {}), dict) else {}
+    candidate_rows = men_payload.get("candidates", []) if isinstance(men_payload.get("candidates", []), list) else []
+
+    alternative_split_caches, alternative_reasons = _fit_available_alternative_model_split_caches(
+        context=context,
+        gender_key="men",
+        feature_df=feature_df,
+        feature_columns=feature_columns,
+    )
+    tabpfn_split_cache = alternative_split_caches.get("tabpfn_benchmark")
+    histgb_split_cache = alternative_split_caches.get("histgb_benchmark")
+
+    component_split_probabilities = {
+        "baseline": baseline_split_probabilities,
+        **alternative_split_caches,
+    }
+
+    reference_weights = next(
+        (
+            row.get("weights")
+            for row in candidate_rows
+            if isinstance(row, dict)
+            and row.get("candidate_id") == "baseline_histgb_blend"
+            and row.get("status") == "available"
+            and isinstance(row.get("weights"), dict)
+        ),
+        None,
+    )
+    reference_split_cache = None
+    reference_reason = None
+    if isinstance(reference_weights, dict):
+        reference_split_cache, reference_reason = _build_weighted_split_probabilities(
+            component_split_probabilities=component_split_probabilities,
+            weights=reference_weights,
+        )
+    else:
+        reference_reason = "reference_weights_unavailable"
+
+    baseline_scores = _score_val_test_from_split_probabilities(
+        gender_key="men",
+        split_probabilities=baseline_split_probabilities,
+    )
+    baseline_test_metrics = baseline_scores.get("test", {})
+    reference_scores = (
+        _score_val_test_from_split_probabilities(gender_key="men", split_probabilities=reference_split_cache)
+        if reference_split_cache is not None
+        else {"val": {}, "test": {}}
+    )
+    reference_val_brier = _as_float_or_none(reference_scores.get("val", {}).get("brier"))
+    reference_test_metrics = reference_scores.get("test", {})
+
+    if reference_split_cache is None or tabpfn_split_cache is None:
+        report_payload = {
+            "run_id": context.get("run_id"),
+            "seed": context.get("seed"),
+            "generated_at": _now_utc_iso(),
+            "policy_name": "men_tabpfn_followup_v1",
+            "status": "failed",
+            "reason": reference_reason or alternative_reasons.get("tabpfn_benchmark"),
+            "reference_candidate_id": "baseline_histgb_blend",
+            "alt_model_availability": alternative_reasons,
+            "selected_candidate_id": None,
+            "research_decision": "insufficient_data",
+            "research_reason": "tabpfn_or_reference_unavailable",
+            "candidates": [],
+        }
+        report_path = Path(context["run_dir"]) / "men_tabpfn_followup_report.json"
+        _write_json(report_path, report_payload)
+        return {
+            "report_json": str(report_path),
+            "policy_name": report_payload["policy_name"],
+            "status": report_payload["status"],
+            "selected_candidate_id": report_payload["selected_candidate_id"],
+            "research_decision": report_payload["research_decision"],
+            "research_reason": report_payload["research_reason"],
+        }
+
+    candidate_split_caches: dict[str, dict[str, dict[str, np.ndarray]]] = {
+        "reference_raw": reference_split_cache,
+        "tabpfn_raw": tabpfn_split_cache,
+    }
+    if histgb_split_cache is not None:
+        candidate_split_caches["histgb_raw"] = histgb_split_cache
+
+    reference_tabpfn_candidates: list[dict[str, Any]] = []
+    for reference_weight in ALTERNATIVE_MODEL_WEIGHT_GRID:
+        weights = {
+            "reference_raw": float(reference_weight),
+            "tabpfn_raw": float(1.0 - float(reference_weight)),
+        }
+        split_cache, blend_reason = _build_weighted_split_probabilities(
+            component_split_probabilities=candidate_split_caches,
+            weights=weights,
+        )
+        if split_cache is None:
+            continue
+        val_metrics = _score_val_test_from_split_probabilities(gender_key="men", split_probabilities=split_cache).get("val", {})
+        test_metrics = _score_val_test_from_split_probabilities(gender_key="men", split_probabilities=split_cache).get("test", {})
+        reference_tabpfn_candidates.append(
+            {
+                "weights": weights,
+                "split_cache": split_cache,
+                "val_metrics": val_metrics,
+                "test_metrics": test_metrics,
+                "val_brier": _as_float_or_none(val_metrics.get("brier")),
+                "test_brier": _as_float_or_none(test_metrics.get("brier")),
+                "reason": blend_reason,
+            }
+        )
+
+    valid_reference_tabpfn = [
+        row for row in reference_tabpfn_candidates if isinstance(row.get("val_brier"), (int, float))
+    ]
+    if valid_reference_tabpfn:
+        best_reference_tabpfn = min(
+            valid_reference_tabpfn,
+            key=lambda row: (
+                float(row["val_brier"]),
+                abs(float(row["weights"]["reference_raw"]) - 0.5),
+            ),
+        )
+        candidate_split_caches["reference_tabpfn_blend"] = best_reference_tabpfn["split_cache"]
+
+    candidates: list[dict[str, Any]] = []
+    for candidate_id in ("reference_raw", "tabpfn_raw", "reference_tabpfn_blend"):
+        split_cache = candidate_split_caches.get(candidate_id)
+        if split_cache is None:
+            continue
+        scores = _score_val_test_from_split_probabilities(gender_key="men", split_probabilities=split_cache)
+        val_metrics = scores.get("val", {})
+        test_metrics = scores.get("test", {})
+        val_prob = np.asarray(split_cache.get("Val", {}).get("y_prob", np.asarray([], dtype=float)), dtype=float)
+        val_true = np.asarray(split_cache.get("Val", {}).get("y_true", np.asarray([], dtype=float)), dtype=float)
+        test_prob = np.asarray(split_cache.get("Test", {}).get("y_prob", np.asarray([], dtype=float)), dtype=float)
+        test_true = np.asarray(split_cache.get("Test", {}).get("y_true", np.asarray([], dtype=float)), dtype=float)
+        calibration_policy = _build_calibration_policy_for_gender(
+            gender_key="men",
+            val_true=val_true,
+            val_prob=val_prob,
+            test_true=test_true,
+            test_prob=test_prob,
+            regime_summary={},
+            drift_alerts=[],
+        )
+        calibrated_test_metrics = (
+            calibration_policy.get("selected_test_metrics", {})
+            if isinstance(calibration_policy.get("selected_test_metrics", {}), dict)
+            else {}
+        )
+        weights = None
+        if candidate_id == "reference_raw":
+            weights = reference_weights
+        elif candidate_id == "reference_tabpfn_blend" and valid_reference_tabpfn:
+            weights = best_reference_tabpfn["weights"]
+        candidates.append(
+            {
+                "candidate_id": candidate_id,
+                "status": "available",
+                "reason": None,
+                "weights": weights,
+                "raw_metrics": {"val": val_metrics, "test": test_metrics},
+                "raw_local_gate_check_vs_baseline": _local_gate_check(
+                    candidate_test_metrics=test_metrics,
+                    baseline_test_metrics=baseline_test_metrics,
+                ),
+                "raw_local_gate_check_vs_reference": _local_gate_check(
+                    candidate_test_metrics=test_metrics,
+                    baseline_test_metrics=reference_test_metrics,
+                ),
+                "calibration_policy": {
+                    "selected_method": calibration_policy.get("selected_method"),
+                    "selection_reason": calibration_policy.get("selection_reason"),
+                    "selected_test_metrics": calibrated_test_metrics,
+                    "candidate_methods": calibration_policy.get("candidate_methods"),
+                },
+                "calibrated_local_gate_check_vs_baseline": _local_gate_check(
+                    candidate_test_metrics=calibrated_test_metrics,
+                    baseline_test_metrics=baseline_test_metrics,
+                ),
+                "calibrated_local_gate_check_vs_reference": _local_gate_check(
+                    candidate_test_metrics=calibrated_test_metrics,
+                    baseline_test_metrics=reference_test_metrics,
+                ),
+            }
+        )
+
+    available_candidates = [row for row in candidates if row.get("status") == "available"]
+    selected_candidate = None
+    research_decision = "insufficient_data"
+    research_reason = "no_available_candidates"
+    if available_candidates:
+        selected_candidate = min(
+            available_candidates,
+            key=lambda row: (
+                float(row.get("raw_metrics", {}).get("val", {}).get("brier", float("inf"))),
+                row.get("candidate_id") != "reference_raw",
+            ),
+        )
+        selected_val_brier = _as_float_or_none(selected_candidate.get("raw_metrics", {}).get("val", {}).get("brier"))
+        if (
+            selected_candidate.get("candidate_id") != "reference_raw"
+            and isinstance(selected_val_brier, (int, float))
+            and isinstance(reference_val_brier, (int, float))
+            and selected_val_brier <= reference_val_brier - ALTERNATIVE_MODEL_MIN_VAL_IMPROVEMENT
+        ):
+            research_decision = "promising_tabpfn_followup_candidate"
+            research_reason = "improves_reference_val_brier"
+        else:
+            research_decision = "hold_reference_candidate"
+            research_reason = "tabpfn_family_not_better_than_reference"
+
+    report_payload = {
+        "run_id": context.get("run_id"),
+        "seed": context.get("seed"),
+        "generated_at": _now_utc_iso(),
+        "policy_name": "men_tabpfn_followup_v1",
+        "status": "passed",
+        "reason": None,
+        "reference_candidate_id": "baseline_histgb_blend",
+        "reference_weights": reference_weights,
+        "alt_model_availability": alternative_reasons,
+        "candidates": candidates,
+        "selected_candidate_id": selected_candidate.get("candidate_id") if isinstance(selected_candidate, dict) else None,
+        "research_decision": research_decision,
+        "research_reason": research_reason,
+    }
+    report_path = Path(context["run_dir"]) / "men_tabpfn_followup_report.json"
+    _write_json(report_path, report_payload)
+    return {
+        "report_json": str(report_path),
+        "policy_name": report_payload["policy_name"],
+        "status": report_payload["status"],
+        "selected_candidate_id": report_payload["selected_candidate_id"],
+        "research_decision": report_payload["research_decision"],
+        "research_reason": report_payload["research_reason"],
+    }
+
+
+def _build_men_gate_aware_search_report(
+    *,
+    context: dict[str, Any],
+    baseline_split_probabilities: dict[str, dict[str, np.ndarray]],
+    alternative_model_payload: dict[str, Any],
+    men_external_prior_policy_payload: dict[str, Any],
+    men_tabpfn_followup_payload: dict[str, Any],
+) -> dict[str, Any]:
+    baseline_scores = _score_val_test_from_split_probabilities(
+        gender_key="men",
+        split_probabilities=baseline_split_probabilities,
+    )
+    baseline_val_metrics = baseline_scores.get("val", {})
+    baseline_test_metrics = baseline_scores.get("test", {})
+    baseline_val_brier = _as_float_or_none(baseline_val_metrics.get("brier"))
+
+    candidate_rows: list[dict[str, Any]] = []
+
+    alt_by_gender = (
+        alternative_model_payload.get("by_gender", {})
+        if isinstance(alternative_model_payload.get("by_gender", {}), dict)
+        else {}
+    )
+    men_alt = alt_by_gender.get("men", {}) if isinstance(alt_by_gender.get("men", {}), dict) else {}
+    alt_candidates = men_alt.get("candidates", []) if isinstance(men_alt.get("candidates", []), list) else []
+    for row in alt_candidates:
+        if not isinstance(row, dict) or row.get("status") != "available":
+            continue
+        candidate_id = row.get("candidate_id")
+        if candidate_id not in {"baseline_histgb_blend", "baseline_xgboost_blend", "baseline_histgb_xgboost_blend"}:
+            continue
+        metrics = row.get("metrics", {}) if isinstance(row.get("metrics", {}), dict) else {}
+        test_metrics = metrics.get("test", {}) if isinstance(metrics.get("test", {}), dict) else {}
+        candidate_rows.append(
+            {
+                "candidate_id": str(candidate_id),
+                "source": "alternative_model",
+                "weights": row.get("weights"),
+                "raw_metrics": {
+                    "val": metrics.get("val", {}),
+                    "test": test_metrics,
+                },
+                "local_gate_check_vs_baseline": _local_gate_check(
+                    candidate_test_metrics=test_metrics,
+                    baseline_test_metrics=baseline_test_metrics,
+                ),
+            }
+        )
+
+    tabpfn_report_json = (
+        men_tabpfn_followup_payload.get("report_json")
+        if isinstance(men_tabpfn_followup_payload, dict)
+        else None
+    )
+    if isinstance(tabpfn_report_json, str) and tabpfn_report_json.strip():
+        tabpfn_report_path = Path(tabpfn_report_json)
+        if tabpfn_report_path.exists():
+            try:
+                tabpfn_report = json.loads(tabpfn_report_path.read_text(encoding="utf-8"))
+            except Exception:
+                tabpfn_report = {}
+            for row in tabpfn_report.get("candidates", []) if isinstance(tabpfn_report.get("candidates", []), list) else []:
+                if not isinstance(row, dict) or row.get("status") != "available":
+                    continue
+                candidate_rows.append(
+                    {
+                        "candidate_id": str(row.get("candidate_id")),
+                        "source": "men_tabpfn_followup",
+                        "weights": row.get("weights"),
+                        "raw_metrics": row.get("raw_metrics", {}),
+                        "calibration_policy": row.get("calibration_policy"),
+                        "local_gate_check_vs_baseline": row.get("raw_local_gate_check_vs_baseline"),
+                    }
+                )
+
+    external_report_json = (
+        men_external_prior_policy_payload.get("report_json")
+        if isinstance(men_external_prior_policy_payload, dict)
+        else None
+    )
+    if isinstance(external_report_json, str) and external_report_json.strip():
+        external_report_path = Path(external_report_json)
+        if external_report_path.exists():
+            try:
+                external_report = json.loads(external_report_path.read_text(encoding="utf-8"))
+            except Exception:
+                external_report = {}
+            for row in external_report.get("candidates", []) if isinstance(external_report.get("candidates", []), list) else []:
+                if not isinstance(row, dict) or row.get("status") != "available":
+                    continue
+                policy_id = row.get("policy_id")
+                if policy_id not in {"blend_reference", "committee_guardrail_medium_only"}:
+                    continue
+                metrics = row.get("metrics", {}) if isinstance(row.get("metrics", {}), dict) else {}
+                test_metrics = metrics.get("test", {}) if isinstance(metrics.get("test", {}), dict) else {}
+                candidate_rows.append(
+                    {
+                        "candidate_id": str(policy_id),
+                        "source": "men_external_prior_policy",
+                        "weights": {
+                            "seed_prior_weight": row.get("seed_prior_weight"),
+                        },
+                        "raw_metrics": {
+                            "val": metrics.get("val", {}),
+                            "test": test_metrics,
+                        },
+                        "local_gate_check_vs_baseline": _local_gate_check(
+                            candidate_test_metrics=test_metrics,
+                            baseline_test_metrics=baseline_test_metrics,
+                        ),
+                    }
+                )
+
+    deduped_rows: dict[str, dict[str, Any]] = {}
+    for row in candidate_rows:
+        candidate_id = str(row.get("candidate_id"))
+        current = deduped_rows.get(candidate_id)
+        current_val = (
+            float(current.get("raw_metrics", {}).get("val", {}).get("brier", float("inf")))
+            if isinstance(current, dict)
+            else float("inf")
+        )
+        row_val = float(row.get("raw_metrics", {}).get("val", {}).get("brier", float("inf")))
+        if current is None or row_val < current_val:
+            deduped_rows[candidate_id] = row
+
+    scored_candidates: list[dict[str, Any]] = []
+    for row in deduped_rows.values():
+        val_metrics = row.get("raw_metrics", {}).get("val", {}) if isinstance(row.get("raw_metrics", {}), dict) else {}
+        test_metrics = row.get("raw_metrics", {}).get("test", {}) if isinstance(row.get("raw_metrics", {}), dict) else {}
+        val_brier = _as_float_or_none(val_metrics.get("brier"))
+        if not isinstance(val_brier, (int, float)):
+            continue
+        val_ece = _as_float_or_none(val_metrics.get("ece"))
+        val_wmae = _as_float_or_none(val_metrics.get("wmae"))
+        val_gap = _as_float_or_none(val_metrics.get("high_prob_gap"))
+        baseline_val_ece = _as_float_or_none(baseline_val_metrics.get("ece"))
+        baseline_val_wmae = _as_float_or_none(baseline_val_metrics.get("wmae"))
+        baseline_val_gap = _as_float_or_none(baseline_val_metrics.get("high_prob_gap"))
+        ece_penalty = max(0.0, float(val_ece - baseline_val_ece)) if isinstance(val_ece, (int, float)) and isinstance(baseline_val_ece, (int, float)) else 0.0
+        wmae_penalty = max(0.0, float(val_wmae - baseline_val_wmae)) if isinstance(val_wmae, (int, float)) and isinstance(baseline_val_wmae, (int, float)) else 0.0
+        gap_penalty = max(0.0, abs(float(val_gap)) - abs(float(baseline_val_gap))) if isinstance(val_gap, (int, float)) and isinstance(baseline_val_gap, (int, float)) else 0.0
+        objective = float(val_brier) + 0.5 * ece_penalty + 0.5 * wmae_penalty + 0.25 * gap_penalty
+        row["gate_aware_objective"] = objective
+        row["gate_penalties"] = {
+            "ece_penalty": ece_penalty,
+            "wmae_penalty": wmae_penalty,
+            "high_prob_gap_abs_penalty": gap_penalty,
+        }
+        row["local_gate_check_vs_baseline"] = row.get("local_gate_check_vs_baseline") or _local_gate_check(
+            candidate_test_metrics=test_metrics,
+            baseline_test_metrics=baseline_test_metrics,
+        )
+        scored_candidates.append(row)
+
+    selected_candidate = None
+    research_decision = "insufficient_data"
+    research_reason = "no_scored_candidates"
+    if scored_candidates:
+        selected_candidate = min(
+            scored_candidates,
+            key=lambda row: (
+                float(row.get("gate_aware_objective", float("inf"))),
+                row.get("candidate_id") not in {"baseline_histgb_blend", "reference_raw"},
+            ),
+        )
+        selected_id = selected_candidate.get("candidate_id")
+        if selected_id not in {"baseline_histgb_blend", "reference_raw"}:
+            selected_val_brier = _as_float_or_none(selected_candidate.get("raw_metrics", {}).get("val", {}).get("brier"))
+            if (
+                isinstance(selected_val_brier, (int, float))
+                and isinstance(baseline_val_brier, (int, float))
+                and selected_val_brier <= baseline_val_brier - ALTERNATIVE_MODEL_MIN_VAL_IMPROVEMENT
+            ):
+                research_decision = "promising_gate_aware_candidate"
+                research_reason = "candidate_selected_under_gate_aware_objective"
+            else:
+                research_decision = "hold_current_reference"
+                research_reason = "no_gate_aware_edge_vs_reference"
+        else:
+            research_decision = "hold_current_reference"
+            research_reason = "reference_remains_best_under_gate_aware_objective"
+
+    report_payload = {
+        "run_id": context.get("run_id"),
+        "seed": context.get("seed"),
+        "generated_at": _now_utc_iso(),
+        "policy_name": "men_gate_aware_search_v1",
+        "status": "passed",
+        "reason": None,
+        "objective": {
+            "base_metric": "val_brier",
+            "penalties": {
+                "ece_penalty_weight": 0.5,
+                "wmae_penalty_weight": 0.5,
+                "high_prob_gap_abs_penalty_weight": 0.25,
+            },
+        },
+        "baseline_val_metrics": baseline_val_metrics,
+        "baseline_test_metrics": baseline_test_metrics,
+        "candidates": scored_candidates,
+        "selected_candidate_id": selected_candidate.get("candidate_id") if isinstance(selected_candidate, dict) else None,
+        "research_decision": research_decision,
+        "research_reason": research_reason,
+    }
+    report_path = Path(context["run_dir"]) / "men_gate_aware_search_report.json"
+    _write_json(report_path, report_payload)
+    return {
+        "report_json": str(report_path),
+        "policy_name": report_payload["policy_name"],
+        "status": report_payload["status"],
+        "selected_candidate_id": report_payload["selected_candidate_id"],
+        "research_decision": report_payload["research_decision"],
+        "research_reason": report_payload["research_reason"],
+    }
+
+
+def _build_blend_candidate_policy_report(
+    *,
+    context: dict[str, Any],
+    alternative_model_payload: dict[str, Any],
+) -> dict[str, Any]:
+    by_gender_payload = (
+        alternative_model_payload.get("by_gender", {})
+        if isinstance(alternative_model_payload.get("by_gender", {}), dict)
+        else {}
+    )
+
+    by_gender: dict[str, Any] = {}
+    candidate_ready_genders: list[str] = []
+
+    for gender_key in ("men", "women"):
+        gender_payload = by_gender_payload.get(gender_key, {}) if isinstance(by_gender_payload.get(gender_key, {}), dict) else {}
+        selected_candidate_id = gender_payload.get("best_candidate_id")
+        selected_weights = gender_payload.get("selected_candidate_weights")
+        research_decision = gender_payload.get("research_decision")
+
+        is_candidate_ready = (
+            research_decision == "promising_diversity_candidate"
+            and selected_candidate_id == "baseline_histgb_blend"
+            and isinstance(selected_weights, dict)
+            and set(selected_weights.keys()) == {"baseline", "histgb_benchmark"}
+        )
+
+        if is_candidate_ready:
+            candidate_ready_genders.append(gender_key)
+
+        by_gender[gender_key] = {
+            "candidate_status": "ready_for_followup" if is_candidate_ready else "hold_research_only",
+            "selected_candidate_id": selected_candidate_id,
+            "selected_candidate_weights": selected_weights,
+            "research_decision": research_decision,
+            "research_reason": gender_payload.get("research_reason"),
+            "val_brier_delta_vs_baseline": gender_payload.get("selected_val_brier_delta_vs_baseline"),
+            "test_brier_delta_vs_baseline": gender_payload.get("best_test_brier_delta_vs_baseline"),
+            "production_recipe": (
+                {
+                    "baseline_model_family": "lightgbm",
+                    "secondary_model_family": "hist_gradient_boosting",
+                    "blend_weights": selected_weights,
+                    "final_probability_formula": "p_final = w_baseline * p_lgbm + w_histgb * p_histgb",
+                }
+                if is_candidate_ready
+                else None
+            ),
+        }
+
+    aggregate_decision = (
+        "candidate_ready_for_promotion_followup"
+        if len(candidate_ready_genders) == 2
+        else "partial_candidate_ready"
+        if candidate_ready_genders
+        else "hold_research_only"
+    )
+
+    report_payload = {
+        "run_id": context.get("run_id"),
+        "seed": context.get("seed"),
+        "generated_at": _now_utc_iso(),
+        "policy_name": "blend_candidate_policy_v1",
+        "by_gender": by_gender,
+        "aggregate": {
+            "decision": aggregate_decision,
+            "candidate_ready_genders": candidate_ready_genders,
+        },
+    }
+
+    report_path = Path(context["run_dir"]) / "blend_candidate_policy_report.json"
+    _write_json(report_path, report_payload)
+
+    return {
+        "report_json": str(report_path),
+        "policy_name": report_payload["policy_name"],
+        "by_gender": by_gender,
+        "aggregate": report_payload["aggregate"],
+    }
+
+
+def _select_prediction_policy_probabilities(
+    *,
+    context: dict[str, Any],
+    genders_payload: dict[str, Any],
+    feature_frames_by_gender: dict[str, pd.DataFrame],
+    baseline_split_probabilities: dict[str, dict[str, dict[str, np.ndarray]]],
+    blend_candidate_policy_payload: dict[str, Any],
+    men_external_prior_policy_payload: dict[str, Any],
+    men_combo_followup_payload: dict[str, Any],
+    policy_name: str,
+) -> tuple[dict[str, dict[str, dict[str, np.ndarray]]], dict[str, Any]]:
+    selected_policy = str(policy_name or "baseline").strip().lower()
+    if selected_policy not in PREDICTION_POLICIES:
+        selected_policy = "baseline"
+
+    if selected_policy == "baseline":
+        return baseline_split_probabilities, {
+            "selected_policy": "baseline",
+            "reason": "default_baseline_policy",
+            "by_gender": {
+                gender_key: {"selected_policy": "baseline", "reason": "default_baseline_policy"}
+                for gender_key in ("men", "women")
+            },
+        }
+
+    selected_probabilities: dict[str, dict[str, dict[str, np.ndarray]]] = {}
+    diagnostics_by_gender: dict[str, Any] = {}
+    fallback_required = False
+    blend_policy_by_gender = (
+        blend_candidate_policy_payload.get("by_gender", {})
+        if isinstance(blend_candidate_policy_payload.get("by_gender", {}), dict)
+        else {}
+    )
+
+    for gender_key in ("men", "women"):
+        candidate_policy_entry = (
+            blend_policy_by_gender.get(gender_key, {})
+            if isinstance(blend_policy_by_gender.get(gender_key, {}), dict)
+            else {}
+        )
+        selected_weights = (
+            candidate_policy_entry.get("selected_candidate_weights")
+            if isinstance(candidate_policy_entry.get("selected_candidate_weights"), dict)
+            else {}
+        )
+        baseline_weight = _as_float_or_none(selected_weights.get("baseline"))
+        histgb_weight = _as_float_or_none(selected_weights.get("histgb_benchmark"))
+        candidate_status = candidate_policy_entry.get("candidate_status")
+        if (
+            candidate_status != "ready_for_followup"
+            or baseline_weight is None
+            or histgb_weight is None
+            or abs((baseline_weight + histgb_weight) - 1.0) > 1e-6
+        ):
+            fallback_required = True
+            selected_probabilities[gender_key] = baseline_split_probabilities.get(gender_key, {})
+            diagnostics_by_gender[gender_key] = {
+                "selected_policy": "baseline",
+                "reason": "candidate_recipe_unavailable_fallback",
+                "blend_weights": None,
+            }
+            continue
+
+        feature_columns = (
+            genders_payload.get(gender_key, {}).get("feature_snapshot", {}).get("feature_columns", [])
+            if isinstance(genders_payload.get(gender_key, {}), dict)
+            else []
+        )
+        alt_split_cache, alt_reason = _fit_histgb_candidate_split_probabilities(
+            context=context,
+            gender_key=gender_key,
+            feature_df=feature_frames_by_gender.get(gender_key, pd.DataFrame()),
+            feature_columns=feature_columns,
+        )
+        baseline_cache = baseline_split_probabilities.get(gender_key, {})
+        if alt_split_cache is None:
+            fallback_required = True
+            selected_probabilities[gender_key] = baseline_cache
+            diagnostics_by_gender[gender_key] = {
+                "selected_policy": "baseline",
+                "reason": f"blend_unavailable:{alt_reason}",
+                "blend_weights": None,
+            }
+            continue
+
+        blended_cache: dict[str, dict[str, np.ndarray]] = {}
+        for split_label in CANONICAL_SPLITS:
+            baseline_split = baseline_cache.get(split_label, {})
+            alt_split = alt_split_cache.get(split_label, {})
+            baseline_true = np.asarray(baseline_split.get("y_true", np.asarray([], dtype=float)), dtype=float)
+            baseline_prob = np.asarray(baseline_split.get("y_prob", np.asarray([], dtype=float)), dtype=float)
+            alt_true = np.asarray(alt_split.get("y_true", np.asarray([], dtype=float)), dtype=float)
+            alt_prob = np.asarray(alt_split.get("y_prob", np.asarray([], dtype=float)), dtype=float)
+
+            if baseline_true.shape != alt_true.shape or baseline_prob.shape != alt_prob.shape or baseline_true.shape != baseline_prob.shape:
+                fallback_required = True
+                blended_cache = baseline_cache
+                diagnostics_by_gender[gender_key] = {
+                    "selected_policy": "baseline",
+                    "reason": "blend_shape_mismatch_fallback",
+                    "blend_weights": None,
+                }
+                break
+
+            blended_cache[split_label] = {
+                "y_true": baseline_true,
+                "y_prob": np.clip(float(baseline_weight) * baseline_prob + float(histgb_weight) * alt_prob, 0.0, 1.0),
+            }
+        else:
+            diagnostics_by_gender[gender_key] = {
+                "selected_policy": "blend_candidate_v1",
+                "reason": "selected_candidate_recipe",
+                "blend_weights": {
+                    "baseline": float(baseline_weight),
+                    "histgb_benchmark": float(histgb_weight),
+                },
+            }
+
+        selected_probabilities[gender_key] = blended_cache
+
+    if selected_policy == "blend_candidate_v1":
+        aggregate_reason = "blend_candidate_v1_applied"
+        aggregate_policy = "blend_candidate_v1"
+        if fallback_required:
+            aggregate_reason = "partial_or_full_fallback_to_baseline"
+            aggregate_policy = "mixed_with_baseline_fallback"
+
+        return selected_probabilities, {
+            "selected_policy": aggregate_policy,
+            "reason": aggregate_reason,
+            "by_gender": diagnostics_by_gender,
+        }
+
+    men_feature_columns = (
+        genders_payload.get("men", {}).get("feature_snapshot", {}).get("feature_columns", [])
+        if isinstance(genders_payload.get("men", {}), dict)
+        else []
+    )
+
+    if selected_policy == "men_external_prior_policy_v1":
+        men_external_cache, men_external_reason, men_external_diagnostics = _build_men_external_prior_selected_split_probabilities(
+            context=context,
+            feature_df=feature_frames_by_gender.get("men", pd.DataFrame()),
+            baseline_split_probabilities=baseline_split_probabilities.get("men", {}),
+            blend_candidate_policy_payload=blend_candidate_policy_payload,
+            men_external_prior_policy_payload=men_external_prior_policy_payload,
+        )
+        if men_external_cache is None:
+            fallback_required = True
+            diagnostics_by_gender["men"] = {
+                "selected_policy": diagnostics_by_gender.get("men", {}).get("selected_policy", "baseline"),
+                "reason": f"men_external_prior_unavailable:{men_external_reason}",
+                "blend_weights": diagnostics_by_gender.get("men", {}).get("blend_weights"),
+                "external_prior_policy": None,
+            }
+        else:
+            selected_probabilities["men"] = men_external_cache
+            diagnostics_by_gender["men"] = {
+                "selected_policy": "men_external_prior_policy_v1",
+                "reason": "selected_external_prior_policy",
+                "blend_weights": (
+                    men_external_diagnostics.get("reference_blend_weights")
+                    if isinstance(men_external_diagnostics, dict)
+                    else diagnostics_by_gender.get("men", {}).get("blend_weights")
+                ),
+                "external_prior_policy": men_external_diagnostics,
+            }
+    else:
+        men_combo_cache, men_combo_reason, men_combo_diagnostics = _build_men_combo_followup_selected_split_probabilities(
+            context=context,
+            feature_df=feature_frames_by_gender.get("men", pd.DataFrame()),
+            feature_columns=men_feature_columns,
+            baseline_split_probabilities=baseline_split_probabilities.get("men", {}),
+            men_combo_followup_payload=men_combo_followup_payload,
+        )
+        if men_combo_cache is None:
+            fallback_required = True
+            diagnostics_by_gender["men"] = {
+                "selected_policy": diagnostics_by_gender.get("men", {}).get("selected_policy", "baseline"),
+                "reason": f"men_combo_followup_unavailable:{men_combo_reason}",
+                "blend_weights": diagnostics_by_gender.get("men", {}).get("blend_weights"),
+                "combo_followup_policy": None,
+            }
+        else:
+            selected_probabilities["men"] = men_combo_cache
+            diagnostics_by_gender["men"] = {
+                "selected_policy": "men_combo_followup_v1",
+                "reason": "selected_combo_followup_candidate",
+                "blend_weights": (
+                    men_combo_diagnostics.get("weights")
+                    if isinstance(men_combo_diagnostics, dict)
+                    else diagnostics_by_gender.get("men", {}).get("blend_weights")
+                ),
+                "combo_followup_policy": men_combo_diagnostics,
+            }
+
+    if selected_policy == "men_external_prior_policy_v1":
+        aggregate_reason = "men_external_prior_policy_v1_applied"
+        aggregate_policy = "men_external_prior_policy_v1"
+    else:
+        aggregate_reason = "men_combo_followup_v1_applied"
+        aggregate_policy = "men_combo_followup_v1"
+
+    if fallback_required:
+        fallback_required = True
+        aggregate_reason = "partial_or_full_fallback_to_baseline"
+        aggregate_policy = "mixed_with_baseline_fallback"
+
+    return selected_probabilities, {
+        "selected_policy": aggregate_policy,
+        "reason": aggregate_reason,
+        "by_gender": diagnostics_by_gender,
+    }
+
+
+def _build_men_policy_refinement_specs() -> list[dict[str, Any]]:
+    return [
+        {
+            "policy_id": "baseline_reference",
+            "label": "Baseline reference",
+            "regime_alt_weights": {"close": 0.0, "medium": 0.0, "wide": 0.0, "unknown": 0.0},
+        },
+        {
+            "policy_id": "blend_reference",
+            "label": "Uniform blend reference",
+            "regime_alt_weights": {"close": 0.5, "medium": 0.5, "wide": 0.5, "unknown": 0.5},
+        },
+        {
+            "policy_id": "wide_blend_else_baseline",
+            "label": "Blend wide only",
+            "regime_alt_weights": {"close": 0.0, "medium": 0.0, "wide": 0.5, "unknown": 0.0},
+        },
+        {
+            "policy_id": "medium_wide_blend",
+            "label": "Blend medium and wide",
+            "regime_alt_weights": {"close": 0.0, "medium": 0.5, "wide": 0.5, "unknown": 0.0},
+        },
+        {
+            "policy_id": "close_light_medium_wide_blend",
+            "label": "Light close blend, full medium/wide blend",
+            "regime_alt_weights": {"close": 0.25, "medium": 0.5, "wide": 0.5, "unknown": 0.25},
+        },
+        {
+            "policy_id": "close_baseline_medium_light_wide_blend",
+            "label": "Light medium blend, full wide blend",
+            "regime_alt_weights": {"close": 0.0, "medium": 0.25, "wide": 0.5, "unknown": 0.0},
+        },
+    ]
+
+
+def _build_men_policy_refinement_report(
+    *,
+    context: dict[str, Any],
+    feature_df: pd.DataFrame,
+    feature_columns: list[str],
+    baseline_split_probabilities: dict[str, dict[str, np.ndarray]],
+    blend_candidate_policy_payload: dict[str, Any],
+) -> dict[str, Any]:
+    alt_split_cache, alt_reason = _fit_histgb_candidate_split_probabilities(
+        context=context,
+        gender_key="men",
+        feature_df=feature_df,
+        feature_columns=feature_columns,
+    )
+    if alt_split_cache is None:
+        report_payload = {
+            "run_id": context.get("run_id"),
+            "seed": context.get("seed"),
+            "generated_at": _now_utc_iso(),
+            "policy_name": "men_regime_policy_research_v1",
+            "status": "skipped",
+            "reason": f"alt_model_unavailable:{alt_reason}",
+            "candidates": [],
+            "selected_policy_id": None,
+            "research_decision": "insufficient_data",
+            "research_reason": "alt_model_unavailable",
+        }
+        report_path = Path(context["run_dir"]) / "men_policy_refinement_report.json"
+        _write_json(report_path, report_payload)
+        return {
+            "report_json": str(report_path),
+            "policy_name": report_payload["policy_name"],
+            "status": report_payload["status"],
+            "research_decision": report_payload["research_decision"],
+            "selected_policy_id": report_payload["selected_policy_id"],
+        }
+
+    baseline_scores = _score_val_test_from_split_probabilities(
+        gender_key="men",
+        split_probabilities=baseline_split_probabilities,
+    )
+    baseline_val_brier = _as_float_or_none(baseline_scores.get("val", {}).get("brier"))
+    baseline_test_brier = _as_float_or_none(baseline_scores.get("test", {}).get("brier"))
+    baseline_test_ece = _as_float_or_none(baseline_scores.get("test", {}).get("ece"))
+    baseline_test_wmae = _as_float_or_none(baseline_scores.get("test", {}).get("wmae"))
+    baseline_test_gap = _as_float_or_none(baseline_scores.get("test", {}).get("high_prob_gap"))
+    baseline_test_gap_abs = abs(baseline_test_gap) if baseline_test_gap is not None else None
+
+    split_seed_regimes: dict[str, np.ndarray] = {}
+    for split_label in ("Val", "Test"):
+        split_df = feature_df[feature_df["Split"] == split_label].copy()
+        if split_df.empty or "SeedNum_diff" not in split_df.columns:
+            split_seed_regimes[split_label] = np.asarray([], dtype=object)
+            continue
+        split_seed_regimes[split_label] = split_df["SeedNum_diff"].apply(_seed_gap_bucket_from_diff).to_numpy()
+
+    candidates: list[dict[str, Any]] = []
+    for spec in _build_men_policy_refinement_specs():
+        regime_alt_weights = spec["regime_alt_weights"]
+        policy_split_cache: dict[str, dict[str, np.ndarray]] = {}
+        policy_valid = True
+        for split_label in ("Val", "Test"):
+            baseline_split = baseline_split_probabilities.get(split_label, {})
+            alt_split = alt_split_cache.get(split_label, {})
+            baseline_true = np.asarray(baseline_split.get("y_true", np.asarray([], dtype=float)), dtype=float)
+            baseline_prob = np.asarray(baseline_split.get("y_prob", np.asarray([], dtype=float)), dtype=float)
+            alt_true = np.asarray(alt_split.get("y_true", np.asarray([], dtype=float)), dtype=float)
+            alt_prob = np.asarray(alt_split.get("y_prob", np.asarray([], dtype=float)), dtype=float)
+            seed_regimes = split_seed_regimes.get(split_label, np.asarray([], dtype=object))
+
+            if (
+                baseline_true.shape != alt_true.shape
+                or baseline_prob.shape != alt_prob.shape
+                or baseline_true.shape != baseline_prob.shape
+                or baseline_true.shape[0] != seed_regimes.shape[0]
+            ):
+                policy_valid = False
+                break
+
+            blended_prob = baseline_prob.copy()
+            for regime_name in ("close", "medium", "wide", "unknown"):
+                regime_mask = seed_regimes == regime_name
+                if np.any(regime_mask):
+                    alt_weight = float(regime_alt_weights.get(regime_name, 0.0))
+                    blended_prob[regime_mask] = np.clip(
+                        (1.0 - alt_weight) * baseline_prob[regime_mask] + alt_weight * alt_prob[regime_mask],
+                        0.0,
+                        1.0,
+                    )
+            policy_split_cache[split_label] = {"y_true": baseline_true, "y_prob": blended_prob}
+
+        if not policy_valid:
+            candidates.append(
+                {
+                    "policy_id": spec["policy_id"],
+                    "label": spec["label"],
+                    "status": "failed",
+                    "reason": "split_alignment_mismatch",
+                    "regime_alt_weights": regime_alt_weights,
+                    "metrics": {"val": {}, "test": {}},
+                    "local_reference_check": {"status": "failed", "reason": "split_alignment_mismatch"},
+                }
+            )
+            continue
+
+        scores = _score_val_test_from_split_probabilities(
+            gender_key="men",
+            split_probabilities=policy_split_cache,
+        )
+        test_payload = scores.get("test", {})
+        test_gap = _as_float_or_none(test_payload.get("high_prob_gap"))
+        test_gap_abs = abs(test_gap) if test_gap is not None else None
+
+        local_reference_ready = (
+            isinstance(_as_float_or_none(test_payload.get("brier")), (int, float))
+            and isinstance(baseline_test_brier, (int, float))
+            and _as_float_or_none(test_payload.get("brier")) <= baseline_test_brier + REGRESSION_NUMERIC_EPS
+            and isinstance(_as_float_or_none(test_payload.get("ece")), (int, float))
+            and isinstance(baseline_test_ece, (int, float))
+            and _as_float_or_none(test_payload.get("ece")) <= baseline_test_ece + REGRESSION_NUMERIC_EPS
+            and isinstance(_as_float_or_none(test_payload.get("wmae")), (int, float))
+            and isinstance(baseline_test_wmae, (int, float))
+            and _as_float_or_none(test_payload.get("wmae")) <= baseline_test_wmae + REGRESSION_NUMERIC_EPS
+            and isinstance(test_gap_abs, (int, float))
+            and isinstance(baseline_test_gap_abs, (int, float))
+            and test_gap_abs <= baseline_test_gap_abs + REGRESSION_NUMERIC_EPS
+        )
+
+        candidates.append(
+            {
+                "policy_id": spec["policy_id"],
+                "label": spec["label"],
+                "status": "available",
+                "reason": None,
+                "regime_alt_weights": regime_alt_weights,
+                "metrics": {
+                    "val": scores.get("val", {}),
+                    "test": test_payload,
+                    "val_brier": _as_float_or_none(scores.get("val", {}).get("brier")),
+                    "test_brier": _as_float_or_none(test_payload.get("brier")),
+                },
+                "deltas_vs_baseline": {
+                    "val_brier": _safe_delta(
+                        _as_float_or_none(scores.get("val", {}).get("brier")),
+                        baseline_val_brier,
+                    ),
+                    "test_brier": _safe_delta(
+                        _as_float_or_none(test_payload.get("brier")),
+                        baseline_test_brier,
+                    ),
+                    "test_ece": _safe_delta(_as_float_or_none(test_payload.get("ece")), baseline_test_ece),
+                    "test_wmae": _safe_delta(_as_float_or_none(test_payload.get("wmae")), baseline_test_wmae),
+                    "test_high_prob_gap_abs": (
+                        float(test_gap_abs - baseline_test_gap_abs)
+                        if isinstance(test_gap_abs, (int, float)) and isinstance(baseline_test_gap_abs, (int, float))
+                        else None
+                    ),
+                },
+                "local_reference_check": {
+                    "status": "passed" if local_reference_ready else "failed",
+                    "reason": None if local_reference_ready else "calibration_or_brier_not_improved_enough",
+                },
+            }
+        )
+
+    available_candidates = [
+        row for row in candidates if row.get("status") == "available" and isinstance(row.get("metrics", {}).get("val_brier"), (int, float))
+    ]
+    selected_candidate = None
+    research_decision = "insufficient_data"
+    research_reason = "no_available_candidates"
+    local_reference_ready_candidates = [
+        row for row in available_candidates if row.get("local_reference_check", {}).get("status") == "passed"
+    ]
+
+    if local_reference_ready_candidates:
+        selected_candidate = min(
+            local_reference_ready_candidates,
+            key=lambda row: (
+                float(row.get("metrics", {}).get("val_brier")),
+                row.get("policy_id") == "baseline_reference",
+            ),
+        )
+        research_decision = "promising_local_policy_candidate"
+        research_reason = "improves_val_and_local_reference_metrics"
+    elif available_candidates:
+        selected_candidate = min(
+            available_candidates,
+            key=lambda row: (
+                float(row.get("metrics", {}).get("val_brier")),
+                row.get("policy_id") == "baseline_reference",
+            ),
+        )
+        selected_val_delta = _safe_delta(
+            selected_candidate.get("metrics", {}).get("val_brier"),
+            baseline_val_brier,
+        )
+        selected_test_delta = _safe_delta(
+            selected_candidate.get("metrics", {}).get("test_brier"),
+            baseline_test_brier,
+        )
+        if (
+            isinstance(selected_val_delta, (int, float))
+            and selected_val_delta <= -MEN_POLICY_MIN_VAL_IMPROVEMENT
+            and (selected_test_delta is None or selected_test_delta <= REGRESSION_NUMERIC_EPS)
+            and selected_candidate.get("policy_id") != "baseline_reference"
+        ):
+            research_decision = "promising_brier_only"
+            research_reason = "improves_val_without_test_degradation_but_gate_not_clear"
+        else:
+            research_decision = "hold_current_policy"
+            research_reason = "no_stable_policy_edge"
+
+    current_candidate_policy = (
+        blend_candidate_policy_payload.get("by_gender", {}).get("men", {})
+        if isinstance(blend_candidate_policy_payload.get("by_gender", {}), dict)
+        else {}
+    )
+    report_payload = {
+        "run_id": context.get("run_id"),
+        "seed": context.get("seed"),
+        "generated_at": _now_utc_iso(),
+        "policy_name": "men_regime_policy_research_v1",
+        "status": "passed",
+        "reason": None,
+        "reference_candidate": {
+            "selected_candidate_id": current_candidate_policy.get("selected_candidate_id"),
+            "selected_candidate_weights": current_candidate_policy.get("selected_candidate_weights"),
+        },
+        "baseline_test_metrics": baseline_scores.get("test", {}),
+        "candidates": candidates,
+        "selected_policy_id": selected_candidate.get("policy_id") if isinstance(selected_candidate, dict) else None,
+        "selected_policy_local_reference_status": (
+            selected_candidate.get("local_reference_check", {}).get("status")
+            if isinstance(selected_candidate, dict)
+            else None
+        ),
+        "research_decision": research_decision,
+        "research_reason": research_reason,
+    }
+    report_path = Path(context["run_dir"]) / "men_policy_refinement_report.json"
+    _write_json(report_path, report_payload)
+    return {
+        "report_json": str(report_path),
+        "policy_name": report_payload["policy_name"],
+        "status": report_payload["status"],
+        "research_decision": report_payload["research_decision"],
+        "research_reason": report_payload["research_reason"],
+        "selected_policy_id": report_payload["selected_policy_id"],
+        "selected_policy_local_reference_status": report_payload["selected_policy_local_reference_status"],
+    }
+
+
+def _fit_seed_prior_split_probabilities(
+    *,
+    feature_df: pd.DataFrame,
+    gender_key: str,
+) -> tuple[dict[str, dict[str, np.ndarray]] | None, str | None]:
+    if "SeedNum_diff" not in feature_df.columns:
+        return None, "seed_num_diff_missing"
+
+    train_df = feature_df[feature_df["Split"] == "Train"].copy()
+    if train_df.empty:
+        return None, "insufficient_split_rows"
+    if np.unique(train_df["Target"]).shape[0] < 2:
+        return None, "single_class_train_target"
+
+    try:
+        prior_model = LogisticRegression(
+            random_state=4100 if gender_key == "men" else 4200,
+            solver="lbfgs",
+            max_iter=200,
+        )
+        prior_model.fit(train_df[["SeedNum_diff"]], train_df["Target"].to_numpy(dtype=float))
+    except Exception as exc:
+        return None, f"seed_prior_fit_failed:{exc.__class__.__name__}"
+
+    split_cache: dict[str, dict[str, np.ndarray]] = {}
+    for split_label in CANONICAL_SPLITS:
+        split_df = feature_df[feature_df["Split"] == split_label].copy()
+        if split_df.empty:
+            split_cache[split_label] = {
+                "y_true": np.asarray([], dtype=float),
+                "y_prob": np.asarray([], dtype=float),
+            }
+            continue
+        split_true = split_df["Target"].to_numpy(dtype=float)
+        split_prob = prior_model.predict_proba(split_df[["SeedNum_diff"]])[:, 1]
+        split_cache[split_label] = {
+            "y_true": split_true,
+            "y_prob": np.asarray(split_prob, dtype=float),
+        }
+
+    return split_cache, None
+
+
+def _build_men_external_prior_policy_report(
+    *,
+    context: dict[str, Any],
+    feature_df: pd.DataFrame,
+    baseline_split_probabilities: dict[str, dict[str, np.ndarray]],
+    blend_candidate_policy_payload: dict[str, Any],
+) -> dict[str, Any]:
+    alt_split_cache, alt_reason = _fit_histgb_candidate_split_probabilities(
+        context=context,
+        gender_key="men",
+        feature_df=feature_df,
+        feature_columns=[
+            column
+            for column in (
+                "SeedNum_diff",
+                "NetRtg_diff",
+                "PythWR_diff",
+                "Luck_diff",
+                "MasseyPct_diff",
+                "MasseyAvgRank_diff",
+                "SeedPythMispricing_diff",
+                "SeedNetRtgMispricing_diff",
+                "SeedMasseyMispricing_diff",
+            )
+            if column in feature_df.columns
+        ],
+    )
+    seed_prior_cache, seed_prior_reason = _fit_seed_prior_split_probabilities(
+        feature_df=feature_df,
+        gender_key="men",
+    )
+    if alt_split_cache is None or seed_prior_cache is None:
+        report_payload = {
+            "run_id": context.get("run_id"),
+            "seed": context.get("seed"),
+            "generated_at": _now_utc_iso(),
+            "policy_name": "men_external_prior_policy_research_v1",
+            "status": "skipped",
+            "reason": alt_reason or seed_prior_reason,
+            "candidates": [],
+            "selected_policy_id": None,
+            "research_decision": "insufficient_data",
+            "research_reason": "required_prior_or_alt_missing",
+        }
+        report_path = Path(context["run_dir"]) / "men_external_prior_policy_report.json"
+        _write_json(report_path, report_payload)
+        return {
+            "report_json": str(report_path),
+            "policy_name": report_payload["policy_name"],
+            "status": report_payload["status"],
+            "research_decision": report_payload["research_decision"],
+            "selected_policy_id": report_payload["selected_policy_id"],
+        }
+
+    selected_weights = (
+        blend_candidate_policy_payload.get("by_gender", {}).get("men", {}).get("selected_candidate_weights")
+        if isinstance(blend_candidate_policy_payload.get("by_gender", {}), dict)
+        else {}
+    )
+    if not isinstance(selected_weights, dict):
+        selected_weights = {}
+    baseline_weight = _as_float_or_none(selected_weights.get("baseline")) or 0.5
+    histgb_weight = _as_float_or_none(selected_weights.get("histgb_benchmark")) or 0.5
+
+    split_seed_regimes: dict[str, np.ndarray] = {}
+    split_seed_disagreement: dict[str, np.ndarray] = {}
+    blend_split_cache: dict[str, dict[str, np.ndarray]] = {}
+    for split_label in ("Val", "Test"):
+        split_df = feature_df[feature_df["Split"] == split_label].copy()
+        baseline_split = baseline_split_probabilities.get(split_label, {})
+        alt_split = alt_split_cache.get(split_label, {})
+        seed_split = seed_prior_cache.get(split_label, {})
+        baseline_true = np.asarray(baseline_split.get("y_true", np.asarray([], dtype=float)), dtype=float)
+        baseline_prob = np.asarray(baseline_split.get("y_prob", np.asarray([], dtype=float)), dtype=float)
+        alt_true = np.asarray(alt_split.get("y_true", np.asarray([], dtype=float)), dtype=float)
+        alt_prob = np.asarray(alt_split.get("y_prob", np.asarray([], dtype=float)), dtype=float)
+        seed_prob = np.asarray(seed_split.get("y_prob", np.asarray([], dtype=float)), dtype=float)
+        if (
+            baseline_true.shape != alt_true.shape
+            or baseline_true.shape != baseline_prob.shape
+            or baseline_prob.shape != alt_prob.shape
+            or baseline_prob.shape != seed_prob.shape
+            or baseline_true.shape[0] != split_df.shape[0]
+        ):
+            report_payload = {
+                "run_id": context.get("run_id"),
+                "seed": context.get("seed"),
+                "generated_at": _now_utc_iso(),
+                "policy_name": "men_external_prior_policy_research_v1",
+                "status": "failed",
+                "reason": f"split_alignment_mismatch:{split_label}",
+                "candidates": [],
+                "selected_policy_id": None,
+                "research_decision": "insufficient_data",
+                "research_reason": "split_alignment_mismatch",
+            }
+            report_path = Path(context["run_dir"]) / "men_external_prior_policy_report.json"
+            _write_json(report_path, report_payload)
+            return {
+                "report_json": str(report_path),
+                "policy_name": report_payload["policy_name"],
+                "status": report_payload["status"],
+                "research_decision": report_payload["research_decision"],
+                "selected_policy_id": report_payload["selected_policy_id"],
+            }
+        blend_prob = np.clip(baseline_weight * baseline_prob + histgb_weight * alt_prob, 0.0, 1.0)
+        blend_split_cache[split_label] = {"y_true": baseline_true, "y_prob": blend_prob}
+        split_seed_regimes[split_label] = split_df["SeedNum_diff"].apply(_seed_gap_bucket_from_diff).to_numpy()
+        split_seed_disagreement[split_label] = np.abs(blend_prob - seed_prob)
+
+    baseline_scores = _score_val_test_from_split_probabilities(
+        gender_key="men",
+        split_probabilities=baseline_split_probabilities,
+    )
+    blend_scores = _score_val_test_from_split_probabilities(
+        gender_key="men",
+        split_probabilities=blend_split_cache,
+    )
+    canonical_baseline_test = baseline_scores.get("test", {})
+    reference_blend_val_brier = _as_float_or_none(blend_scores.get("val", {}).get("brier"))
+    reference_blend_test_brier = _as_float_or_none(blend_scores.get("test", {}).get("brier"))
+
+    policy_specs = [
+        {
+            "policy_id": "blend_reference",
+            "label": "Blend reference",
+            "regimes": ("close", "medium"),
+            "disagreement_threshold": None,
+            "seed_prior_weight": 0.0,
+        },
+        {
+            "policy_id": "committee_guardrail_light",
+            "label": "Light committee guardrail",
+            "regimes": ("close", "medium"),
+            "disagreement_threshold": 0.15,
+            "seed_prior_weight": 0.25,
+        },
+        {
+            "policy_id": "committee_guardrail_medium",
+            "label": "Medium committee guardrail",
+            "regimes": ("close", "medium"),
+            "disagreement_threshold": 0.15,
+            "seed_prior_weight": 0.4,
+        },
+        {
+            "policy_id": "committee_guardrail_close_only",
+            "label": "Close-only committee guardrail",
+            "regimes": ("close",),
+            "disagreement_threshold": 0.12,
+            "seed_prior_weight": 0.4,
+        },
+        {
+            "policy_id": "committee_guardrail_medium_only",
+            "label": "Medium-only committee guardrail",
+            "regimes": ("medium",),
+            "disagreement_threshold": 0.12,
+            "seed_prior_weight": 0.4,
+        },
+    ]
+
+    candidates: list[dict[str, Any]] = []
+    for spec in policy_specs:
+        policy_split_cache: dict[str, dict[str, np.ndarray]] = {}
+        for split_label in ("Val", "Test"):
+            blend_prob = np.asarray(blend_split_cache[split_label]["y_prob"], dtype=float)
+            blend_true = np.asarray(blend_split_cache[split_label]["y_true"], dtype=float)
+            seed_prob = np.asarray(seed_prior_cache[split_label]["y_prob"], dtype=float)
+            regimes = split_seed_regimes[split_label]
+            disagreements = split_seed_disagreement[split_label]
+
+            adjusted_prob = blend_prob.copy()
+            if spec["seed_prior_weight"] > 0.0 and spec["disagreement_threshold"] is not None:
+                targeted = np.isin(regimes, np.asarray(spec["regimes"], dtype=object))
+                disagreement_mask = disagreements >= float(spec["disagreement_threshold"])
+                apply_mask = targeted & disagreement_mask
+                if np.any(apply_mask):
+                    seed_weight = float(spec["seed_prior_weight"])
+                    adjusted_prob[apply_mask] = np.clip(
+                        (1.0 - seed_weight) * blend_prob[apply_mask] + seed_weight * seed_prob[apply_mask],
+                        0.0,
+                        1.0,
+                    )
+
+            policy_split_cache[split_label] = {"y_true": blend_true, "y_prob": adjusted_prob}
+
+        scores = _score_val_test_from_split_probabilities(
+            gender_key="men",
+            split_probabilities=policy_split_cache,
+        )
+        test_payload = scores.get("test", {})
+        candidates.append(
+            {
+                "policy_id": spec["policy_id"],
+                "label": spec["label"],
+                "status": "available",
+                "trigger_regimes": list(spec["regimes"]),
+                "disagreement_threshold": spec["disagreement_threshold"],
+                "seed_prior_weight": spec["seed_prior_weight"],
+                "metrics": {
+                    "val": scores.get("val", {}),
+                    "test": test_payload,
+                    "val_brier": _as_float_or_none(scores.get("val", {}).get("brier")),
+                    "test_brier": _as_float_or_none(test_payload.get("brier")),
+                },
+                "deltas_vs_blend": {
+                    "val_brier": _safe_delta(_as_float_or_none(scores.get("val", {}).get("brier")), reference_blend_val_brier),
+                    "test_brier": _safe_delta(_as_float_or_none(test_payload.get("brier")), reference_blend_test_brier),
+                    "test_ece": _safe_delta(_as_float_or_none(test_payload.get("ece")), _as_float_or_none(blend_scores.get("test", {}).get("ece"))),
+                    "test_wmae": _safe_delta(_as_float_or_none(test_payload.get("wmae")), _as_float_or_none(blend_scores.get("test", {}).get("wmae"))),
+                },
+                "deltas_vs_canonical_baseline": {
+                    "test_brier": _safe_delta(_as_float_or_none(test_payload.get("brier")), _as_float_or_none(canonical_baseline_test.get("brier"))),
+                    "test_ece": _safe_delta(_as_float_or_none(test_payload.get("ece")), _as_float_or_none(canonical_baseline_test.get("ece"))),
+                    "test_wmae": _safe_delta(_as_float_or_none(test_payload.get("wmae")), _as_float_or_none(canonical_baseline_test.get("wmae"))),
+                },
+            }
+        )
+
+    available_candidates = [
+        row for row in candidates if isinstance(row.get("metrics", {}).get("val_brier"), (int, float))
+    ]
+    selected_candidate = None
+    research_decision = "insufficient_data"
+    research_reason = "no_available_candidates"
+    if available_candidates:
+        selected_candidate = min(
+            available_candidates,
+            key=lambda row: (
+                float(row.get("metrics", {}).get("val_brier")),
+                row.get("policy_id") == "blend_reference",
+            ),
+        )
+        selected_val_delta = _safe_delta(
+            selected_candidate.get("metrics", {}).get("val_brier"),
+            reference_blend_val_brier,
+        )
+        selected_test_delta = _safe_delta(
+            selected_candidate.get("metrics", {}).get("test_brier"),
+            reference_blend_test_brier,
+        )
+        if (
+            selected_candidate.get("policy_id") != "blend_reference"
+            and isinstance(selected_val_delta, (int, float))
+            and selected_val_delta <= -MEN_POLICY_MIN_VAL_IMPROVEMENT
+            and (selected_test_delta is None or selected_test_delta <= REGRESSION_NUMERIC_EPS)
+        ):
+            research_decision = "promising_disagreement_policy"
+            research_reason = "improves_blend_with_committee_guardrail"
+        else:
+            research_decision = "hold_blend_reference"
+            research_reason = "no_stable_gain_vs_blend_reference"
+
+    report_payload = {
+        "run_id": context.get("run_id"),
+        "seed": context.get("seed"),
+        "generated_at": _now_utc_iso(),
+        "policy_name": "men_external_prior_policy_research_v1",
+        "status": "passed",
+        "reason": None,
+        "reference_blend_weights": {
+            "baseline": baseline_weight,
+            "histgb_benchmark": histgb_weight,
+        },
+        "seed_prior_model": "logistic_seed_prior_v1",
+        "candidates": candidates,
+        "selected_policy_id": selected_candidate.get("policy_id") if isinstance(selected_candidate, dict) else None,
+        "research_decision": research_decision,
+        "research_reason": research_reason,
+    }
+    report_path = Path(context["run_dir"]) / "men_external_prior_policy_report.json"
+    _write_json(report_path, report_payload)
+    return {
+        "report_json": str(report_path),
+        "policy_name": report_payload["policy_name"],
+        "status": report_payload["status"],
+        "research_decision": report_payload["research_decision"],
+        "research_reason": report_payload["research_reason"],
+        "selected_policy_id": report_payload["selected_policy_id"],
+        "candidates": candidates,
+        "reference_blend_weights": report_payload["reference_blend_weights"],
+    }
+
+
+def _build_men_external_prior_selected_split_probabilities(
+    *,
+    context: dict[str, Any],
+    feature_df: pd.DataFrame,
+    baseline_split_probabilities: dict[str, dict[str, np.ndarray]],
+    blend_candidate_policy_payload: dict[str, Any],
+    men_external_prior_policy_payload: dict[str, Any],
+) -> tuple[dict[str, dict[str, np.ndarray]] | None, str | None, dict[str, Any] | None]:
+    selected_policy_id = (
+        men_external_prior_policy_payload.get("selected_policy_id")
+        if isinstance(men_external_prior_policy_payload, dict)
+        else None
+    )
+    candidates = (
+        men_external_prior_policy_payload.get("candidates", [])
+        if isinstance(men_external_prior_policy_payload.get("candidates", []), list)
+        else []
+    )
+    selected_candidate = next(
+        (
+            row for row in candidates
+            if isinstance(row, dict) and row.get("policy_id") == selected_policy_id and row.get("status") == "available"
+        ),
+        None,
+    )
+    if not isinstance(selected_candidate, dict):
+        return None, "selected_external_prior_policy_unavailable", None
+
+    selected_weights = (
+        blend_candidate_policy_payload.get("by_gender", {}).get("men", {}).get("selected_candidate_weights")
+        if isinstance(blend_candidate_policy_payload.get("by_gender", {}), dict)
+        else {}
+    )
+    if not isinstance(selected_weights, dict):
+        selected_weights = {}
+    baseline_weight = _as_float_or_none(selected_weights.get("baseline")) or 0.5
+    histgb_weight = _as_float_or_none(selected_weights.get("histgb_benchmark")) or 0.5
+
+    alt_split_cache, alt_reason = _fit_histgb_candidate_split_probabilities(
+        context=context,
+        gender_key="men",
+        feature_df=feature_df,
+        feature_columns=[
+            column
+            for column in (
+                "SeedNum_diff",
+                "NetRtg_diff",
+                "PythWR_diff",
+                "Luck_diff",
+                "MasseyPct_diff",
+                "MasseyAvgRank_diff",
+                "SeedPythMispricing_diff",
+                "SeedNetRtgMispricing_diff",
+                "SeedMasseyMispricing_diff",
+            )
+            if column in feature_df.columns
+        ],
+    )
+    if alt_split_cache is None:
+        return None, f"histgb_unavailable:{alt_reason}", None
+
+    seed_prior_cache, seed_prior_reason = _fit_seed_prior_split_probabilities(
+        feature_df=feature_df,
+        gender_key="men",
+    )
+    if seed_prior_cache is None:
+        return None, f"seed_prior_unavailable:{seed_prior_reason}", None
+
+    trigger_regimes = tuple(selected_candidate.get("trigger_regimes", []))
+    disagreement_threshold = _as_float_or_none(selected_candidate.get("disagreement_threshold"))
+    seed_prior_weight = _as_float_or_none(selected_candidate.get("seed_prior_weight")) or 0.0
+
+    selected_split_cache: dict[str, dict[str, np.ndarray]] = {}
+    for split_label in CANONICAL_SPLITS:
+        split_df = feature_df[feature_df["Split"] == split_label].copy()
+        baseline_split = baseline_split_probabilities.get(split_label, {})
+        alt_split = alt_split_cache.get(split_label, {})
+        seed_split = seed_prior_cache.get(split_label, {})
+
+        baseline_true = np.asarray(baseline_split.get("y_true", np.asarray([], dtype=float)), dtype=float)
+        baseline_prob = np.asarray(baseline_split.get("y_prob", np.asarray([], dtype=float)), dtype=float)
+        alt_true = np.asarray(alt_split.get("y_true", np.asarray([], dtype=float)), dtype=float)
+        alt_prob = np.asarray(alt_split.get("y_prob", np.asarray([], dtype=float)), dtype=float)
+        seed_prob = np.asarray(seed_split.get("y_prob", np.asarray([], dtype=float)), dtype=float)
+
+        if (
+            baseline_true.shape != alt_true.shape
+            or baseline_true.shape != baseline_prob.shape
+            or baseline_prob.shape != alt_prob.shape
+            or baseline_prob.shape != seed_prob.shape
+            or baseline_true.shape[0] != split_df.shape[0]
+        ):
+            return None, f"split_alignment_mismatch:{split_label}", None
+
+        blend_prob = np.clip(baseline_weight * baseline_prob + histgb_weight * alt_prob, 0.0, 1.0)
+        adjusted_prob = blend_prob.copy()
+        if seed_prior_weight > 0.0 and disagreement_threshold is not None:
+            regimes = split_df["SeedNum_diff"].apply(_seed_gap_bucket_from_diff).to_numpy()
+            disagreements = np.abs(blend_prob - seed_prob)
+            targeted = np.isin(regimes, np.asarray(trigger_regimes, dtype=object))
+            apply_mask = targeted & (disagreements >= float(disagreement_threshold))
+            if np.any(apply_mask):
+                adjusted_prob[apply_mask] = np.clip(
+                    (1.0 - seed_prior_weight) * blend_prob[apply_mask] + seed_prior_weight * seed_prob[apply_mask],
+                    0.0,
+                    1.0,
+                )
+
+        selected_split_cache[split_label] = {"y_true": baseline_true, "y_prob": adjusted_prob}
+
+    diagnostics = {
+        "selected_policy_id": selected_policy_id,
+        "trigger_regimes": list(trigger_regimes),
+        "disagreement_threshold": disagreement_threshold,
+        "seed_prior_weight": seed_prior_weight,
+        "reference_blend_weights": {
+            "baseline": float(baseline_weight),
+            "histgb_benchmark": float(histgb_weight),
+        },
+    }
+    return selected_split_cache, None, diagnostics
+
+
+def _build_men_combo_followup_selected_split_probabilities(
+    *,
+    context: dict[str, Any],
+    feature_df: pd.DataFrame,
+    feature_columns: list[str],
+    baseline_split_probabilities: dict[str, dict[str, np.ndarray]],
+    men_combo_followup_payload: dict[str, Any],
+) -> tuple[dict[str, dict[str, np.ndarray]] | None, str | None, dict[str, Any] | None]:
+    report_json = men_combo_followup_payload.get("report_json") if isinstance(men_combo_followup_payload, dict) else None
+    if not isinstance(report_json, str) or not report_json.strip():
+        return None, "combo_report_missing", None
+
+    report_path = Path(report_json)
+    if not report_path.exists():
+        return None, "combo_report_not_found", None
+
+    try:
+        report_payload = json.loads(report_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return None, f"combo_report_read_failed:{exc.__class__.__name__}", None
+
+    selected_candidate_id = report_payload.get("selected_candidate_id")
+    candidates = report_payload.get("candidates", []) if isinstance(report_payload.get("candidates", []), list) else []
+    selected_candidate = next(
+        (
+            row
+            for row in candidates
+            if isinstance(row, dict) and row.get("candidate_id") == selected_candidate_id and row.get("status") == "available"
+        ),
+        None,
+    )
+    if not isinstance(selected_candidate, dict):
+        return None, "selected_combo_candidate_unavailable", None
+
+    feature_columns = [column for column in feature_columns if column in feature_df.columns]
+    alt_split_caches, _ = _fit_available_alternative_model_split_caches(
+        context=context,
+        gender_key="men",
+        feature_df=feature_df,
+        feature_columns=feature_columns,
+    )
+    component_split_probabilities = {"baseline": baseline_split_probabilities, **alt_split_caches}
+    raw_split_cache, build_reason = _build_weighted_split_probabilities(
+        component_split_probabilities=component_split_probabilities,
+        weights=selected_candidate.get("weights", {}),
+    )
+    if raw_split_cache is None:
+        return None, f"combo_split_unavailable:{build_reason}", None
+
+    selected_method = (
+        selected_candidate.get("calibration_policy", {}).get("selected_method")
+        if isinstance(selected_candidate.get("calibration_policy", {}), dict)
+        else "none"
+    )
+    if selected_method not in CALIBRATION_POLICY_METHODS:
+        selected_method = "none"
+
+    if selected_method != "none":
+        val_cache = raw_split_cache.get("Val", {})
+        test_cache = raw_split_cache.get("Test", {})
+        adjusted_val, adjusted_test, calibration_reason = _calibrate_probability_vectors(
+            method=selected_method,
+            val_true=np.asarray(val_cache.get("y_true", np.asarray([], dtype=float)), dtype=float),
+            val_prob=np.asarray(val_cache.get("y_prob", np.asarray([], dtype=float)), dtype=float),
+            test_prob=np.asarray(test_cache.get("y_prob", np.asarray([], dtype=float)), dtype=float),
+        )
+        if calibration_reason is not None or adjusted_val is None or adjusted_test is None:
+            return None, f"combo_calibration_unavailable:{calibration_reason}", None
+        raw_split_cache["Val"] = {
+            "y_true": np.asarray(val_cache.get("y_true", np.asarray([], dtype=float)), dtype=float),
+            "y_prob": np.asarray(adjusted_val, dtype=float),
+        }
+        raw_split_cache["Test"] = {
+            "y_true": np.asarray(test_cache.get("y_true", np.asarray([], dtype=float)), dtype=float),
+            "y_prob": np.asarray(adjusted_test, dtype=float),
+        }
+
+    diagnostics = {
+        "selected_candidate_id": selected_candidate_id,
+        "selected_method": selected_method,
+        "weights": selected_candidate.get("weights"),
+    }
+    return raw_split_cache, None, diagnostics
+
+
+def _build_men_residual_correction_report(
+    *,
+    context: dict[str, Any],
+    feature_df: pd.DataFrame,
+    baseline_split_probabilities: dict[str, dict[str, np.ndarray]],
+    blend_candidate_policy_payload: dict[str, Any],
+    men_external_prior_policy_payload: dict[str, Any],
+) -> dict[str, Any]:
+    reference_split_cache, reference_reason, reference_diagnostics = _build_men_external_prior_selected_split_probabilities(
+        context=context,
+        feature_df=feature_df,
+        baseline_split_probabilities=baseline_split_probabilities,
+        blend_candidate_policy_payload=blend_candidate_policy_payload,
+        men_external_prior_policy_payload=men_external_prior_policy_payload,
+    )
+    if reference_split_cache is None:
+        report_payload = {
+            "run_id": context.get("run_id"),
+            "seed": context.get("seed"),
+            "generated_at": _now_utc_iso(),
+            "policy_name": "men_residual_correction_research_v1",
+            "status": "skipped",
+            "reason": reference_reason,
+            "reference_candidate": None,
+            "candidates": [],
+            "selected_candidate_id": None,
+            "research_decision": "insufficient_data",
+            "research_reason": "reference_candidate_unavailable",
+        }
+        report_path = Path(context["run_dir"]) / "men_residual_correction_report.json"
+        _write_json(report_path, report_payload)
+        return {
+            "report_json": str(report_path),
+            "policy_name": report_payload["policy_name"],
+            "status": report_payload["status"],
+            "selected_candidate_id": report_payload["selected_candidate_id"],
+            "research_decision": report_payload["research_decision"],
+        }
+
+    baseline_scores = _score_val_test_from_split_probabilities(
+        gender_key="men",
+        split_probabilities=baseline_split_probabilities,
+    )
+    reference_scores = _score_val_test_from_split_probabilities(
+        gender_key="men",
+        split_probabilities=reference_split_cache,
+    )
+    baseline_test_metrics = baseline_scores.get("test", {})
+    reference_test_metrics = reference_scores.get("test", {})
+
+    candidate_specs = [
+        ("reference_raw", "Reference raw candidate", ()),
+        ("residual_logit_only", "Residual on logit(p)", ()),
+        ("residual_logit_seed", "Residual on logit(p) + SeedNum_diff", ("SeedNum_diff",)),
+        ("residual_logit_seed_netrtg", "Residual on logit(p) + SeedNum_diff + NetRtg_diff", ("SeedNum_diff", "NetRtg_diff")),
+    ]
+
+    split_frames = {
+        split_label: feature_df[feature_df["Split"] == split_label].copy()
+        for split_label in CANONICAL_SPLITS
+    }
+    candidates: list[dict[str, Any]] = []
+    for candidate_id, label, extra_features in candidate_specs:
+        if candidate_id == "reference_raw":
+            raw_metrics = {
+                "val": reference_scores.get("val", {}),
+                "test": reference_test_metrics,
+            }
+            candidates.append(
+                {
+                    "candidate_id": candidate_id,
+                    "label": label,
+                    "status": "available",
+                    "reason": None,
+                    "model_features": ["reference_probability"],
+                    "raw_metrics": raw_metrics,
+                    "local_gate_check_vs_baseline": _local_gate_check(
+                        candidate_test_metrics=reference_test_metrics,
+                        baseline_test_metrics=baseline_test_metrics,
+                    ),
+                    "local_gate_check_vs_reference": _local_gate_check(
+                        candidate_test_metrics=reference_test_metrics,
+                        baseline_test_metrics=reference_test_metrics,
+                    ),
+                }
+            )
+            continue
+
+        required_columns = [column for column in extra_features if column not in feature_df.columns]
+        if required_columns:
+            candidates.append(
+                {
+                    "candidate_id": candidate_id,
+                    "label": label,
+                    "status": "skipped",
+                    "reason": f"feature_columns_missing:{','.join(required_columns)}",
+                    "model_features": ["reference_probability", *extra_features],
+                }
+            )
+            continue
+
+        train_frame = split_frames.get("Train", pd.DataFrame())
+        val_frame = split_frames.get("Val", pd.DataFrame())
+        test_frame = split_frames.get("Test", pd.DataFrame())
+        train_prob = np.asarray(reference_split_cache.get("Train", {}).get("y_prob", np.asarray([], dtype=float)), dtype=float)
+        val_prob = np.asarray(reference_split_cache.get("Val", {}).get("y_prob", np.asarray([], dtype=float)), dtype=float)
+        test_prob = np.asarray(reference_split_cache.get("Test", {}).get("y_prob", np.asarray([], dtype=float)), dtype=float)
+        train_true = np.asarray(reference_split_cache.get("Train", {}).get("y_true", np.asarray([], dtype=float)), dtype=float)
+        val_true = np.asarray(reference_split_cache.get("Val", {}).get("y_true", np.asarray([], dtype=float)), dtype=float)
+        test_true = np.asarray(reference_split_cache.get("Test", {}).get("y_true", np.asarray([], dtype=float)), dtype=float)
+
+        if (
+            train_prob.shape[0] != train_frame.shape[0]
+            or val_prob.shape[0] != val_frame.shape[0]
+            or test_prob.shape[0] != test_frame.shape[0]
+            or train_true.shape[0] != train_frame.shape[0]
+        ):
+            candidates.append(
+                {
+                    "candidate_id": candidate_id,
+                    "label": label,
+                    "status": "failed",
+                    "reason": "split_alignment_mismatch",
+                    "model_features": ["reference_probability", *extra_features],
+                }
+            )
+            continue
+
+        X_train = np.column_stack(
+            [
+                _probability_to_logit(train_prob),
+                *[train_frame[column].to_numpy(dtype=float) for column in extra_features],
+            ]
+        )
+        X_val = np.column_stack(
+            [
+                _probability_to_logit(val_prob),
+                *[val_frame[column].to_numpy(dtype=float) for column in extra_features],
+            ]
+        )
+        X_test = np.column_stack(
+            [
+                _probability_to_logit(test_prob),
+                *[test_frame[column].to_numpy(dtype=float) for column in extra_features],
+            ]
+        )
+
+        try:
+            correction_model = LogisticRegression(random_state=0, solver="lbfgs", max_iter=200)
+            correction_model.fit(X_train, train_true)
+            corrected_val = correction_model.predict_proba(X_val)[:, 1]
+            corrected_test = correction_model.predict_proba(X_test)[:, 1]
+        except Exception as exc:
+            candidates.append(
+                {
+                    "candidate_id": candidate_id,
+                    "label": label,
+                    "status": "failed",
+                    "reason": f"correction_fit_failed:{exc.__class__.__name__}",
+                    "model_features": ["reference_probability", *extra_features],
+                }
+            )
+            continue
+
+        corrected_split_cache = {
+            "Val": {"y_true": val_true, "y_prob": np.asarray(corrected_val, dtype=float)},
+            "Test": {"y_true": test_true, "y_prob": np.asarray(corrected_test, dtype=float)},
+        }
+        corrected_scores = _score_val_test_from_split_probabilities(
+            gender_key="men",
+            split_probabilities=corrected_split_cache,
+        )
+        corrected_test_metrics = corrected_scores.get("test", {})
+        candidates.append(
+            {
+                "candidate_id": candidate_id,
+                "label": label,
+                "status": "available",
+                "reason": None,
+                "model_features": ["reference_probability", *extra_features],
+                "raw_metrics": {
+                    "val": corrected_scores.get("val", {}),
+                    "test": corrected_test_metrics,
+                },
+                "local_gate_check_vs_baseline": _local_gate_check(
+                    candidate_test_metrics=corrected_test_metrics,
+                    baseline_test_metrics=baseline_test_metrics,
+                ),
+                "local_gate_check_vs_reference": _local_gate_check(
+                    candidate_test_metrics=corrected_test_metrics,
+                    baseline_test_metrics=reference_test_metrics,
+                ),
+            }
+        )
+
+    available_candidates = [row for row in candidates if row.get("status") == "available"]
+    selected_candidate = None
+    research_decision = "insufficient_data"
+    research_reason = "no_available_candidates"
+    gate_ready_candidates = [
+        row
+        for row in available_candidates
+        if row.get("candidate_id") != "reference_raw"
+        and row.get("local_gate_check_vs_baseline", {}).get("status") == "passed"
+        and row.get("local_gate_check_vs_reference", {}).get("status") == "passed"
+    ]
+    if gate_ready_candidates:
+        selected_candidate = min(
+            gate_ready_candidates,
+            key=lambda row: float(row.get("raw_metrics", {}).get("val", {}).get("brier", float("inf"))),
+        )
+        research_decision = "promising_residual_candidate"
+        research_reason = "improves_reference_without_losing_local_gate"
+    elif available_candidates:
+        selected_candidate = min(
+            available_candidates,
+            key=lambda row: (
+                float(row.get("raw_metrics", {}).get("val", {}).get("brier", float("inf"))),
+                row.get("candidate_id") == "reference_raw",
+            ),
+        )
+        research_decision = "hold_reference_candidate"
+        research_reason = "no_residual_candidate_clears_local_gate"
+
+    report_payload = {
+        "run_id": context.get("run_id"),
+        "seed": context.get("seed"),
+        "generated_at": _now_utc_iso(),
+        "policy_name": "men_residual_correction_research_v1",
+        "status": "passed",
+        "reason": None,
+        "reference_candidate": {
+            "source_policy": "men_external_prior_policy_v1_raw",
+            "diagnostics": reference_diagnostics,
+            "test_metrics": reference_test_metrics,
+        },
+        "baseline_test_metrics": baseline_test_metrics,
+        "candidates": candidates,
+        "selected_candidate_id": selected_candidate.get("candidate_id") if isinstance(selected_candidate, dict) else None,
+        "research_decision": research_decision,
+        "research_reason": research_reason,
+    }
+    report_path = Path(context["run_dir"]) / "men_residual_correction_report.json"
+    _write_json(report_path, report_payload)
+    return {
+        "report_json": str(report_path),
+        "policy_name": report_payload["policy_name"],
+        "status": report_payload["status"],
+        "selected_candidate_id": report_payload["selected_candidate_id"],
+        "research_decision": report_payload["research_decision"],
+        "research_reason": report_payload["research_reason"],
+    }
+
+
+def _build_men_regime_routing_report(
+    *,
+    context: dict[str, Any],
+    feature_df: pd.DataFrame,
+    feature_columns: list[str],
+    baseline_split_probabilities: dict[str, dict[str, np.ndarray]],
+    blend_candidate_policy_payload: dict[str, Any],
+    men_external_prior_policy_payload: dict[str, Any],
+    men_combo_followup_payload: dict[str, Any],
+) -> dict[str, Any]:
+    split_frames = {
+        split_label: feature_df[feature_df["Split"] == split_label].copy()
+        for split_label in CANONICAL_SPLITS
+    }
+    baseline_scores = _score_val_test_from_split_probabilities(
+        gender_key="men",
+        split_probabilities=baseline_split_probabilities,
+    )
+    baseline_test_metrics = baseline_scores.get("test", {})
+
+    candidate_split_caches: dict[str, dict[str, dict[str, np.ndarray]]] = {
+        "baseline_raw": baseline_split_probabilities,
+    }
+    candidate_labels = {
+        "baseline_raw": "Baseline raw",
+        "blend_raw": "LGBM + HistGB raw blend",
+        "external_prior_raw": "External prior raw policy",
+        "combo_raw": "LGBM + HistGB + XGBoost raw combo",
+    }
+    candidate_reasons = {
+        "baseline_raw": None,
+        "blend_raw": None,
+        "external_prior_raw": None,
+        "combo_raw": None,
+    }
+
+    men_blend_entry = (
+        blend_candidate_policy_payload.get("by_gender", {}).get("men", {})
+        if isinstance(blend_candidate_policy_payload.get("by_gender", {}), dict)
+        else {}
+    )
+    selected_weights = (
+        men_blend_entry.get("selected_candidate_weights")
+        if isinstance(men_blend_entry.get("selected_candidate_weights"), dict)
+        else {}
+    )
+    baseline_weight = _as_float_or_none(selected_weights.get("baseline")) or 0.5
+    histgb_weight = _as_float_or_none(selected_weights.get("histgb_benchmark")) or 0.5
+    blend_alt_cache, blend_alt_reason = _fit_histgb_candidate_split_probabilities(
+        context=context,
+        gender_key="men",
+        feature_df=feature_df,
+        feature_columns=feature_columns,
+    )
+    if blend_alt_cache is not None:
+        blend_cache: dict[str, dict[str, np.ndarray]] = {}
+        blend_failed_reason = None
+        for split_label in CANONICAL_SPLITS:
+            baseline_split = baseline_split_probabilities.get(split_label, {})
+            alt_split = blend_alt_cache.get(split_label, {})
+            baseline_true = np.asarray(baseline_split.get("y_true", np.asarray([], dtype=float)), dtype=float)
+            baseline_prob = np.asarray(baseline_split.get("y_prob", np.asarray([], dtype=float)), dtype=float)
+            alt_true = np.asarray(alt_split.get("y_true", np.asarray([], dtype=float)), dtype=float)
+            alt_prob = np.asarray(alt_split.get("y_prob", np.asarray([], dtype=float)), dtype=float)
+            if baseline_true.shape != alt_true.shape or baseline_prob.shape != alt_prob.shape or baseline_true.shape != baseline_prob.shape:
+                blend_failed_reason = f"split_alignment_mismatch:{split_label}"
+                break
+            blend_cache[split_label] = {
+                "y_true": baseline_true,
+                "y_prob": np.clip(float(baseline_weight) * baseline_prob + float(histgb_weight) * alt_prob, 0.0, 1.0),
+            }
+        if blend_failed_reason is None:
+            candidate_split_caches["blend_raw"] = blend_cache
+        else:
+            candidate_reasons["blend_raw"] = blend_failed_reason
+    else:
+        candidate_reasons["blend_raw"] = blend_alt_reason
+
+    external_cache, external_reason, external_diagnostics = _build_men_external_prior_selected_split_probabilities(
+        context=context,
+        feature_df=feature_df,
+        baseline_split_probabilities=baseline_split_probabilities,
+        blend_candidate_policy_payload=blend_candidate_policy_payload,
+        men_external_prior_policy_payload=men_external_prior_policy_payload,
+    )
+    if external_cache is not None:
+        candidate_split_caches["external_prior_raw"] = external_cache
+    else:
+        candidate_reasons["external_prior_raw"] = external_reason
+
+    combo_cache = None
+    combo_reason = None
+    report_json = men_combo_followup_payload.get("report_json") if isinstance(men_combo_followup_payload, dict) else None
+    if isinstance(report_json, str) and report_json.strip():
+        report_path = Path(report_json)
+        if report_path.exists():
+            try:
+                combo_report = json.loads(report_path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                combo_report = {}
+                combo_reason = f"combo_report_read_failed:{exc.__class__.__name__}"
+            if combo_reason is None:
+                combo_candidates = (
+                    combo_report.get("candidates", []) if isinstance(combo_report.get("candidates", []), list) else []
+                )
+                combo_candidate = next(
+                    (
+                        row
+                        for row in combo_candidates
+                        if isinstance(row, dict)
+                        and row.get("candidate_id") == "baseline_histgb_xgboost_blend"
+                        and row.get("status") == "available"
+                        and isinstance(row.get("weights"), dict)
+                    ),
+                    None,
+                )
+                if isinstance(combo_candidate, dict):
+                    feature_columns = [column for column in feature_columns if column in feature_df.columns]
+                    alt_split_caches, _ = _fit_available_alternative_model_split_caches(
+                        context=context,
+                        gender_key="men",
+                        feature_df=feature_df,
+                        feature_columns=feature_columns,
+                    )
+                    combo_cache, combo_reason = _build_weighted_split_probabilities(
+                        component_split_probabilities={"baseline": baseline_split_probabilities, **alt_split_caches},
+                        weights=combo_candidate.get("weights", {}),
+                    )
+                else:
+                    combo_reason = "combo_candidate_unavailable"
+        else:
+            combo_reason = "combo_report_not_found"
+    else:
+        combo_reason = "combo_report_missing"
+
+    if combo_cache is not None:
+        candidate_split_caches["combo_raw"] = combo_cache
+    else:
+        candidate_reasons["combo_raw"] = combo_reason
+
+    candidate_pool_ids = ["baseline_raw", "blend_raw", "external_prior_raw", "combo_raw"]
+    regime_names = list(DRIFT_REGIME_ORDER)
+    candidate_rows: list[dict[str, Any]] = []
+    best_val_candidate_by_regime: dict[str, dict[str, Any] | None] = {regime_name: None for regime_name in regime_names}
+
+    for candidate_id in candidate_pool_ids:
+        split_cache = candidate_split_caches.get(candidate_id)
+        if split_cache is None:
+            candidate_rows.append(
+                {
+                    "candidate_id": candidate_id,
+                    "label": candidate_labels.get(candidate_id, candidate_id),
+                    "status": "skipped",
+                    "reason": candidate_reasons.get(candidate_id),
+                }
+            )
+            continue
+
+        overall_scores = _score_val_test_from_split_probabilities(
+            gender_key="men",
+            split_probabilities=split_cache,
+        )
+        regime_metrics: dict[str, dict[str, Any]] = {}
+        for split_label in ("Val", "Test"):
+            split_frame = split_frames.get(split_label, pd.DataFrame())
+            split_payload = split_cache.get(split_label, {})
+            split_true = np.asarray(split_payload.get("y_true", np.asarray([], dtype=float)), dtype=float)
+            split_prob = np.asarray(split_payload.get("y_prob", np.asarray([], dtype=float)), dtype=float)
+
+            split_regimes: dict[str, Any] = {}
+            if split_frame.shape[0] == split_true.shape[0] and "SeedNum_diff" in split_frame.columns:
+                regime_series = split_frame["SeedNum_diff"].apply(_seed_gap_bucket_from_diff)
+                for regime_name in regime_names:
+                    mask = (regime_series == regime_name).to_numpy()
+                    split_regimes[regime_name] = _score_probability_bundle(
+                        gender_key="men",
+                        split_label=f"{split_label}_{regime_name}",
+                        y_true=split_true[mask],
+                        y_prob=split_prob[mask],
+                    )
+            else:
+                for regime_name in regime_names:
+                    split_regimes[regime_name] = {
+                        "sample_count": 0,
+                        "brier": None,
+                        "logloss": None,
+                        "auc": None,
+                        "auc_reason": "split_alignment_mismatch",
+                        "ece": None,
+                        "wmae": None,
+                        "high_prob_gap": None,
+                        "high_prob_reason": "split_alignment_mismatch",
+                        "reason": "split_alignment_mismatch",
+                    }
+            regime_metrics[split_label.lower()] = split_regimes
+
+        candidate_row = {
+            "candidate_id": candidate_id,
+            "label": candidate_labels.get(candidate_id, candidate_id),
+            "status": "available",
+            "reason": candidate_reasons.get(candidate_id),
+            "overall_metrics": {
+                "val": overall_scores.get("val", {}),
+                "test": overall_scores.get("test", {}),
+            },
+            "local_gate_check_vs_baseline": _local_gate_check(
+                candidate_test_metrics=overall_scores.get("test", {}),
+                baseline_test_metrics=baseline_test_metrics,
+            ),
+            "regime_metrics": regime_metrics,
+        }
+        candidate_rows.append(candidate_row)
+
+        for regime_name in regime_names:
+            regime_val_payload = regime_metrics.get("val", {}).get(regime_name, {})
+            regime_val_brier = _as_float_or_none(regime_val_payload.get("brier"))
+            if not isinstance(regime_val_brier, (int, float)):
+                continue
+            incumbent = best_val_candidate_by_regime.get(regime_name)
+            if (
+                incumbent is None
+                or regime_val_brier < float(incumbent.get("val_brier", float("inf")))
+                or (
+                    abs(regime_val_brier - float(incumbent.get("val_brier", float("inf")))) <= REGRESSION_NUMERIC_EPS
+                    and candidate_id == "baseline_raw"
+                )
+            ):
+                best_val_candidate_by_regime[regime_name] = {
+                    "candidate_id": candidate_id,
+                    "label": candidate_labels.get(candidate_id, candidate_id),
+                    "val_brier": regime_val_brier,
+                    "sample_count": int(regime_val_payload.get("sample_count") or 0),
+                }
+
+    routed_split_cache: dict[str, dict[str, np.ndarray]] | None = {}
+    routing_reason = None
+    for split_label in CANONICAL_SPLITS:
+        split_frame = split_frames.get(split_label, pd.DataFrame())
+        baseline_split = baseline_split_probabilities.get(split_label, {})
+        split_true = np.asarray(baseline_split.get("y_true", np.asarray([], dtype=float)), dtype=float)
+        split_prob = np.asarray(baseline_split.get("y_prob", np.asarray([], dtype=float)), dtype=float)
+        if split_frame.shape[0] != split_true.shape[0] or "SeedNum_diff" not in split_frame.columns:
+            routed_split_cache = None
+            routing_reason = f"split_alignment_mismatch:{split_label}"
+            break
+        routed_prob = split_prob.copy()
+        regime_series = split_frame["SeedNum_diff"].apply(_seed_gap_bucket_from_diff)
+        for regime_name in regime_names:
+            selected_regime_candidate = best_val_candidate_by_regime.get(regime_name)
+            selected_candidate_id = (
+                selected_regime_candidate.get("candidate_id") if isinstance(selected_regime_candidate, dict) else None
+            )
+            selected_cache = candidate_split_caches.get(selected_candidate_id) if selected_candidate_id else None
+            if selected_cache is None:
+                continue
+            selected_split = selected_cache.get(split_label, {})
+            selected_prob = np.asarray(selected_split.get("y_prob", np.asarray([], dtype=float)), dtype=float)
+            if selected_prob.shape != split_prob.shape:
+                routed_split_cache = None
+                routing_reason = f"candidate_shape_mismatch:{split_label}:{regime_name}"
+                break
+            mask = (regime_series == regime_name).to_numpy()
+            routed_prob[mask] = selected_prob[mask]
+        if routed_split_cache is None:
+            break
+        routed_split_cache[split_label] = {"y_true": split_true, "y_prob": np.asarray(routed_prob, dtype=float)}
+
+    if routed_split_cache is None:
+        report_payload = {
+            "run_id": context.get("run_id"),
+            "seed": context.get("seed"),
+            "generated_at": _now_utc_iso(),
+            "policy_name": "men_regime_routing_research_v1",
+            "status": "failed",
+            "reason": routing_reason,
+            "candidate_pool_ids": candidate_pool_ids,
+            "candidates": candidate_rows,
+            "regime_selection": {},
+            "selected_policy_id": None,
+            "research_decision": "insufficient_data",
+            "research_reason": "routing_unavailable",
+        }
+        report_path = Path(context["run_dir"]) / "men_regime_routing_report.json"
+        _write_json(report_path, report_payload)
+        return {
+            "report_json": str(report_path),
+            "policy_name": report_payload["policy_name"],
+            "status": report_payload["status"],
+            "selected_policy_id": report_payload["selected_policy_id"],
+            "research_decision": report_payload["research_decision"],
+        }
+
+    routed_scores = _score_val_test_from_split_probabilities(
+        gender_key="men",
+        split_probabilities=routed_split_cache,
+    )
+    routed_val_metrics = routed_scores.get("val", {})
+    routed_test_metrics = routed_scores.get("test", {})
+    baseline_val_metrics = baseline_scores.get("val", {})
+    reference_candidate_id = "external_prior_raw" if "external_prior_raw" in candidate_split_caches else "baseline_raw"
+    reference_test_metrics = next(
+        (
+            row.get("overall_metrics", {}).get("test", {})
+            for row in candidate_rows
+            if row.get("candidate_id") == reference_candidate_id and row.get("status") == "available"
+        ),
+        baseline_test_metrics,
+    )
+
+    local_gate_vs_baseline = _local_gate_check(
+        candidate_test_metrics=routed_test_metrics,
+        baseline_test_metrics=baseline_test_metrics,
+    )
+    local_gate_vs_reference = _local_gate_check(
+        candidate_test_metrics=routed_test_metrics,
+        baseline_test_metrics=reference_test_metrics,
+    )
+
+    selected_policy_id = "regime_best_val_router"
+    regime_selection = {
+        regime_name: best_val_candidate_by_regime.get(regime_name)
+        for regime_name in regime_names
+    }
+    selected_val_delta = _safe_delta(
+        _as_float_or_none(routed_val_metrics.get("brier")),
+        _as_float_or_none(baseline_val_metrics.get("brier")),
+    )
+    selected_test_delta = _safe_delta(
+        _as_float_or_none(routed_test_metrics.get("brier")),
+        _as_float_or_none(baseline_test_metrics.get("brier")),
+    )
+    if (
+        local_gate_vs_baseline.get("status") == "passed"
+        and isinstance(selected_val_delta, (int, float))
+        and selected_val_delta <= -MEN_POLICY_MIN_VAL_IMPROVEMENT
+        and (selected_test_delta is None or selected_test_delta <= REGRESSION_NUMERIC_EPS)
+    ):
+        research_decision = "promising_regime_router"
+        research_reason = "regime_router_clears_local_gate"
+    else:
+        research_decision = "hold_current_reference"
+        research_reason = "no_gate_safe_gain_from_regime_router"
+
+    report_payload = {
+        "run_id": context.get("run_id"),
+        "seed": context.get("seed"),
+        "generated_at": _now_utc_iso(),
+        "policy_name": "men_regime_routing_research_v1",
+        "status": "passed",
+        "reason": None,
+        "candidate_pool_ids": candidate_pool_ids,
+        "candidates": candidate_rows,
+        "reference_candidate_id": reference_candidate_id,
+        "regime_selection": regime_selection,
+        "selected_policy_id": selected_policy_id,
+        "selected_policy_metrics": {
+            "val": routed_val_metrics,
+            "test": routed_test_metrics,
+        },
+        "local_gate_check_vs_baseline": local_gate_vs_baseline,
+        "local_gate_check_vs_reference": local_gate_vs_reference,
+        "research_decision": research_decision,
+        "research_reason": research_reason,
+    }
+    report_path = Path(context["run_dir"]) / "men_regime_routing_report.json"
+    _write_json(report_path, report_payload)
+    return {
+        "report_json": str(report_path),
+        "policy_name": report_payload["policy_name"],
+        "status": report_payload["status"],
+        "selected_policy_id": report_payload["selected_policy_id"],
+        "research_decision": report_payload["research_decision"],
+        "research_reason": report_payload["research_reason"],
+    }
+
+
+def _build_feature_branch_variant_specs(
+    *,
+    gender_key: str,
+    available_feature_columns: list[str],
+) -> list[dict[str, Any]]:
+    available_set = set(available_feature_columns)
+    feature_family = [
+        feature
+        for feature in M005_S04_FEATURE_COLUMNS.get(gender_key, ())
+        if feature in available_set
+    ]
+    if not feature_family:
+        return []
+
+    specs: list[dict[str, Any]] = [
+        {
+            "variant_id": "legacy_baseline",
+            "label": "Legacy baseline",
+            "included_features": [],
+        }
+    ]
+
+    if "PythWR_diff" in feature_family:
+        specs.append(
+            {
+                "variant_id": "pythwr_only",
+                "label": "PythWR only",
+                "included_features": ["PythWR_diff"],
+            }
+        )
+    if "Luck_diff" in feature_family:
+        specs.append(
+            {
+                "variant_id": "luck_only",
+                "label": "Luck only",
+                "included_features": ["Luck_diff"],
+            }
+        )
+    if {"PythWR_diff", "Luck_diff"}.issubset(set(feature_family)):
+        specs.append(
+            {
+                "variant_id": "pythwr_luck",
+                "label": "PythWR + Luck",
+                "included_features": ["PythWR_diff", "Luck_diff"],
+            }
+        )
+
+    massey_features = [
+        feature
+        for feature in ("MasseyRankStd_diff", "MasseyPctSpread_diff", "MasseyOrdinalRange_diff")
+        if feature in available_set
+    ]
+    if massey_features:
+        specs.append(
+            {
+                "variant_id": "massey_spread_only",
+                "label": "Massey spread only",
+                "included_features": massey_features,
+            }
+        )
+
+    if "StyleClash_eFG_BlkPct_diff" in available_set:
+        specs.append(
+            {
+                "variant_id": "style_clash_only",
+                "label": "Style clash only",
+                "included_features": ["StyleClash_eFG_BlkPct_diff"],
+            }
+        )
+
+    seed_mispricing_features = [
+        feature
+        for feature in ("SeedPythMispricing_diff", "SeedNetRtgMispricing_diff", "SeedMasseyMispricing_diff")
+        if feature in available_set
+    ]
+    if seed_mispricing_features:
+        specs.append(
+            {
+                "variant_id": "seed_mispricing_only",
+                "label": "Seed mispricing only",
+                "included_features": seed_mispricing_features,
+            }
+        )
+        if "Luck_diff" in available_set:
+            specs.append(
+                {
+                    "variant_id": "luck_seed_mispricing",
+                    "label": "Luck + seed mispricing",
+                    "included_features": sorted(["Luck_diff", *seed_mispricing_features]),
+                }
+            )
+
+    specs.append(
+        {
+            "variant_id": "full_feature_package",
+            "label": "Full M005-S04 package",
+            "included_features": feature_family,
+        }
+    )
+    return specs
+
+
+def _build_feature_branch_report_for_gender(
+    *,
+    context: dict[str, Any],
+    train_module: Any,
+    gender_key: str,
+    feature_df: pd.DataFrame,
+    current_split_probabilities: dict[str, dict[str, np.ndarray]],
+    current_metrics_by_split: dict[str, Any],
+) -> dict[str, Any]:
+    drop_columns = set(getattr(train_module, "DROP_COLUMNS", ("Season", "TeamA", "TeamB", "Target", "Split")))
+    available_feature_columns = [column for column in feature_df.columns if column not in drop_columns]
+    variant_specs = _build_feature_branch_variant_specs(
+        gender_key=gender_key,
+        available_feature_columns=available_feature_columns,
+    )
+    if not variant_specs:
+        return {
+            "status": "skipped",
+            "reason": "no_feature_family_columns_available",
+            "feature_family_columns": [],
+            "variants": [],
+            "best_variant_id": None,
+            "legacy_baseline_variant_id": None,
+            "current_full_package": {
+                "variant_id": "current_full_package",
+                "status": "reference",
+                "metrics": {
+                    "val": current_metrics_by_split.get("Val", {}),
+                    "test": current_metrics_by_split.get("Test", {}),
+                },
+            },
+            "benchmark": {
+                "best_variant_id": None,
+                "legacy_baseline_variant_id": None,
+                "val_improvement_vs_legacy_brier": None,
+                "test_delta_vs_legacy_brier": None,
+                "test_delta_vs_current_full_brier": None,
+            },
+            "research_decision": "insufficient_data",
+            "research_reason": "no_feature_family_columns_available",
+        }
+
+    feature_family = set(M005_S04_FEATURE_COLUMNS.get(gender_key, ()))
+    gender_label = "M" if gender_key == "men" else "W"
+    variants: list[dict[str, Any]] = []
+
+    current_scores = _score_val_test_from_split_probabilities(
+        gender_key=gender_key,
+        split_probabilities=current_split_probabilities,
+    )
+    current_full_package = {
+        "variant_id": "current_full_package",
+        "status": "reference",
+        "metrics": {
+            "val": current_scores.get("val", {}),
+            "test": current_scores.get("test", {}),
+        },
+    }
+
+    for variant_spec in variant_specs:
+        included_features = set(variant_spec.get("included_features", []))
+        excluded_features = sorted(
+            feature for feature in feature_family if feature in available_feature_columns and feature not in included_features
+        )
+        variant_df = feature_df.drop(columns=excluded_features, errors="ignore")
+
+        try:
+            variant_model, variant_payload = train_module.train_baseline(
+                variant_df,
+                gender_label,
+                random_state=context["seed"],
+            )
+            variant_snapshot = variant_payload.get("feature_snapshot", {})
+            variant_feature_columns = (
+                variant_snapshot.get("feature_columns") if isinstance(variant_snapshot, dict) else None
+            )
+            if not isinstance(variant_feature_columns, list) or not variant_feature_columns:
+                raise RuntimeError("variant_feature_columns_missing")
+
+            split_cache = _predict_model_split_probabilities(
+                model=variant_model,
+                feature_df=variant_df,
+                feature_columns=variant_feature_columns,
+                gender_key=gender_key,
+            )
+            variant_scores = _score_val_test_from_split_probabilities(
+                gender_key=gender_key,
+                split_probabilities=split_cache,
+            )
+            variants.append(
+                {
+                    "variant_id": variant_spec["variant_id"],
+                    "label": variant_spec["label"],
+                    "status": "available",
+                    "reason": None,
+                    "included_features": sorted(included_features),
+                    "excluded_features": excluded_features,
+                    "feature_count": int(len(variant_feature_columns)),
+                    "metrics": {
+                        "val": variant_scores.get("val", {}),
+                        "test": variant_scores.get("test", {}),
+                    },
+                }
+            )
+        except Exception as exc:
+            variants.append(
+                {
+                    "variant_id": variant_spec["variant_id"],
+                    "label": variant_spec["label"],
+                    "status": "failed",
+                    "reason": f"variant_retrain_failed:{exc.__class__.__name__}",
+                    "included_features": sorted(included_features),
+                    "excluded_features": excluded_features,
+                    "feature_count": None,
+                    "metrics": {"val": {}, "test": {}},
+                }
+            )
+
+    available_variants = [
+        variant
+        for variant in variants
+        if variant.get("status") == "available"
+        and isinstance(variant.get("metrics", {}).get("val", {}).get("brier"), (int, float))
+    ]
+    legacy_variant = next((variant for variant in available_variants if variant.get("variant_id") == "legacy_baseline"), None)
+    best_variant = (
+        min(
+            available_variants,
+            key=lambda variant: (
+                float(variant["metrics"]["val"]["brier"]),
+                variant.get("variant_id") != "full_feature_package",
+            ),
+        )
+        if available_variants
+        else None
+    )
+
+    research_decision = "insufficient_data"
+    research_reason = "no_available_variants"
+    benchmark = {
+        "best_variant_id": best_variant.get("variant_id") if isinstance(best_variant, dict) else None,
+        "legacy_baseline_variant_id": legacy_variant.get("variant_id") if isinstance(legacy_variant, dict) else None,
+        "val_improvement_vs_legacy_brier": None,
+        "test_delta_vs_legacy_brier": None,
+        "test_delta_vs_current_full_brier": None,
+    }
+
+    if legacy_variant is not None and best_variant is not None:
+        legacy_val = _as_float_or_none(legacy_variant["metrics"]["val"].get("brier"))
+        legacy_test = _as_float_or_none(legacy_variant["metrics"]["test"].get("brier"))
+        best_val = _as_float_or_none(best_variant["metrics"]["val"].get("brier"))
+        best_test = _as_float_or_none(best_variant["metrics"]["test"].get("brier"))
+        current_test = _as_float_or_none(current_full_package["metrics"]["test"].get("brier"))
+
+        benchmark["val_improvement_vs_legacy_brier"] = (
+            float(legacy_val - best_val)
+            if isinstance(legacy_val, (int, float)) and isinstance(best_val, (int, float))
+            else None
+        )
+        benchmark["test_delta_vs_legacy_brier"] = (
+            float(best_test - legacy_test)
+            if isinstance(legacy_test, (int, float)) and isinstance(best_test, (int, float))
+            else None
+        )
+        benchmark["test_delta_vs_current_full_brier"] = (
+            float(best_test - current_test)
+            if isinstance(current_test, (int, float)) and isinstance(best_test, (int, float))
+            else None
+        )
+
+        if (
+            isinstance(benchmark["val_improvement_vs_legacy_brier"], (int, float))
+            and benchmark["val_improvement_vs_legacy_brier"] >= FEATURE_BRANCH_MIN_VAL_IMPROVEMENT
+            and (
+                benchmark["test_delta_vs_legacy_brier"] is None
+                or benchmark["test_delta_vs_legacy_brier"] <= 0.0
+            )
+        ):
+            research_decision = "promising"
+            research_reason = "improves_legacy_baseline"
+        else:
+            research_decision = "not_promising"
+            research_reason = "no_stable_lift_vs_legacy_baseline"
+
+    return {
+        "status": "passed" if available_variants else "failed",
+        "reason": None if available_variants else "no_available_variants",
+        "feature_family_columns": sorted(feature for feature in feature_family if feature in available_feature_columns),
+        "variants": variants,
+        "best_variant_id": benchmark["best_variant_id"],
+        "legacy_baseline_variant_id": benchmark["legacy_baseline_variant_id"],
+        "current_full_package": current_full_package,
+        "benchmark": benchmark,
+        "research_decision": research_decision,
+        "research_reason": research_reason,
+    }
+
+
+def _build_feature_branch_report(
+    *,
+    context: dict[str, Any],
+    train_module: Any,
+    genders_payload: dict[str, Any],
+    feature_frames_by_gender: dict[str, pd.DataFrame],
+    split_probabilities: dict[str, dict[str, dict[str, np.ndarray]]],
+) -> dict[str, Any]:
+    by_gender = {
+        gender_key: _build_feature_branch_report_for_gender(
+            context=context,
+            train_module=train_module,
+            gender_key=gender_key,
+            feature_df=feature_frames_by_gender.get(gender_key, pd.DataFrame()),
+            current_split_probabilities=split_probabilities.get(gender_key, {}),
+            current_metrics_by_split=(
+                genders_payload.get(gender_key, {}).get("metrics_by_split", {})
+                if isinstance(genders_payload.get(gender_key, {}), dict)
+                else {}
+            ),
+        )
+        for gender_key in ("men", "women")
+    }
+    promising_genders = [
+        gender_key
+        for gender_key, payload in by_gender.items()
+        if isinstance(payload, dict) and payload.get("research_decision") == "promising"
+    ]
+    report_payload = {
+        "run_id": context["run_id"],
+        "seed": context["seed"],
+        "generated_at": _now_utc_iso(),
+        "policy_name": "feature_branch_research_v1",
+        "config": {
+            "min_val_improvement": FEATURE_BRANCH_MIN_VAL_IMPROVEMENT,
+            "feature_family_columns": {
+                gender_key: list(columns)
+                for gender_key, columns in M005_S04_FEATURE_COLUMNS.items()
+            },
+        },
+        "by_gender": by_gender,
+        "aggregate": {
+            "decision": "research_followup_variants" if promising_genders else "hold_current_feature_branch",
+            "promising_genders": promising_genders,
+        },
+    }
+    report_path = Path(context["run_dir"]) / "feature_branch_report.json"
+    _write_json(report_path, report_payload)
+    return {
+        "report_json": str(report_path),
+        "policy_name": report_payload["policy_name"],
+        "config": report_payload["config"],
+        "by_gender": by_gender,
+        "aggregate": report_payload["aggregate"],
+    }
+
+
 def _extract_run_snapshot(stage_outputs: dict[str, Any]) -> dict[str, Any]:
     snapshot = {
         "metrics": {"men": {}, "women": {}},
@@ -1342,6 +5430,7 @@ def _extract_run_snapshot(stage_outputs: dict[str, Any]) -> dict[str, Any]:
 
     train_metrics = stage_outputs.get("train", {}).get("metrics_by_split", {}) if isinstance(stage_outputs, dict) else {}
     eval_output = stage_outputs.get("eval_report", {}) if isinstance(stage_outputs, dict) else {}
+    eval_metrics_table = eval_output.get("metrics_table", []) if isinstance(eval_output, dict) else []
     calibration_summary = (
         eval_output.get("calibration", {}).get("calibration_summary", {})
         if isinstance(eval_output, dict)
@@ -1354,7 +5443,14 @@ def _extract_run_snapshot(stage_outputs: dict[str, Any]) -> dict[str, Any]:
     governance_aggregate = governance_decision.get("aggregate", {}) if isinstance(governance_decision, dict) else {}
 
     for gender_key in ("men", "women"):
-        split_metrics = train_metrics.get(gender_key, {}).get("Test", {}) if isinstance(train_metrics, dict) else {}
+        split_metrics = next(
+            (
+                row
+                for row in eval_metrics_table
+                if isinstance(row, dict) and row.get("gender") == gender_key and row.get("split") == "Test"
+            ),
+            train_metrics.get(gender_key, {}).get("Test", {}) if isinstance(train_metrics, dict) else {},
+        )
         snapshot["metrics"][gender_key] = {
             "brier": _as_float_or_none(split_metrics.get("brier")) if isinstance(split_metrics, dict) else None,
             "logloss": _as_float_or_none(split_metrics.get("logloss")) if isinstance(split_metrics, dict) else None,
@@ -1667,7 +5763,7 @@ def _build_optional_submission(context: dict[str, Any]) -> dict[str, Any]:
         return payload
 
     sample_name = "SampleSubmissionStage1.csv" if submission_stage == "stage1" else "SampleSubmissionStage2.csv"
-    sample_path = KAGGLE_DATA_DIR / sample_name
+    sample_path = _resolve_pipeline_data_dir(required_files=(sample_name,)) / sample_name
     if not sample_path.exists():
         raise RuntimeError(f"submission sample file not found: {sample_path}")
 
@@ -2162,6 +6258,299 @@ def _score_probability_bundle(
     }
 
 
+def _summarize_probability_slice(y_true: np.ndarray, y_prob: np.ndarray) -> dict[str, Any]:
+    sample_count = int(y_true.shape[0])
+    if sample_count == 0:
+        return {
+            "sample_count": 0,
+            "accuracy": None,
+            "brier": None,
+            "pred_mean": None,
+            "actual_rate": None,
+            "reason": "slice_empty",
+        }
+
+    pred_label = (y_prob >= 0.5).astype(int)
+    return {
+        "sample_count": sample_count,
+        "accuracy": float(np.mean(pred_label == y_true)),
+        "brier": float(np.mean((y_prob - y_true) ** 2)),
+        "pred_mean": float(np.mean(y_prob)),
+        "actual_rate": float(np.mean(y_true)),
+        "reason": None,
+    }
+
+
+def _seed_gap_bucket_from_diff(seed_diff: Any) -> str:
+    regime = _seed_regime_from_diff(seed_diff)
+    return regime if regime in DRIFT_REGIME_ORDER else "unknown"
+
+
+def _build_error_split_diagnostics(
+    *,
+    overall_payload: dict[str, Any],
+    confidence_buckets: dict[str, dict[str, Any]],
+    seed_gap_buckets: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    total_errors = 0
+    for payload in confidence_buckets.values():
+        if not isinstance(payload, dict):
+            continue
+        total_errors += int(payload.get("error_count") or 0)
+
+    eligible_confidence = [
+        (bucket_name, payload)
+        for bucket_name, payload in confidence_buckets.items()
+        if isinstance(payload, dict)
+        and int(payload.get("sample_count") or 0) >= ERROR_DIAGNOSTIC_MIN_BUCKET_SAMPLES
+        and isinstance(payload.get("error_rate"), (int, float))
+    ]
+    highest_error_rate_bucket = None
+    largest_error_share_bucket = None
+    if eligible_confidence:
+        highest_name, highest_payload = max(
+            eligible_confidence,
+            key=lambda item: (
+                float(item[1].get("error_rate") or 0.0),
+                int(item[1].get("sample_count") or 0),
+                item[0],
+            ),
+        )
+        highest_error_rate_bucket = {
+            "bucket": highest_name,
+            "sample_count": int(highest_payload.get("sample_count") or 0),
+            "error_rate": float(highest_payload.get("error_rate") or 0.0),
+            "error_count": int(highest_payload.get("error_count") or 0),
+            "error_share": (
+                float((highest_payload.get("error_count") or 0) / total_errors)
+                if total_errors > 0
+                else None
+            ),
+        }
+
+        largest_name, largest_payload = max(
+            eligible_confidence,
+            key=lambda item: (
+                int(item[1].get("error_count") or 0),
+                float(item[1].get("error_rate") or 0.0),
+                item[0],
+            ),
+        )
+        largest_error_share_bucket = {
+            "bucket": largest_name,
+            "sample_count": int(largest_payload.get("sample_count") or 0),
+            "error_rate": float(largest_payload.get("error_rate") or 0.0),
+            "error_count": int(largest_payload.get("error_count") or 0),
+            "error_share": (
+                float((largest_payload.get("error_count") or 0) / total_errors)
+                if total_errors > 0
+                else None
+            ),
+        }
+
+    eligible_seed = [
+        (bucket_name, payload)
+        for bucket_name, payload in seed_gap_buckets.items()
+        if isinstance(payload, dict)
+        and int(payload.get("sample_count") or 0) >= ERROR_DIAGNOSTIC_MIN_BUCKET_SAMPLES
+        and isinstance(payload.get("brier"), (int, float))
+    ]
+    worst_seed_gap_bucket = None
+    if eligible_seed:
+        overall_brier = overall_payload.get("brier") if isinstance(overall_payload, dict) else None
+        worst_name, worst_payload = max(
+            eligible_seed,
+            key=lambda item: (
+                float(item[1].get("brier") or 0.0),
+                -int(item[1].get("sample_count") or 0),
+                item[0],
+            ),
+        )
+        bucket_brier = float(worst_payload.get("brier") or 0.0)
+        worst_seed_gap_bucket = {
+            "bucket": worst_name,
+            "sample_count": int(worst_payload.get("sample_count") or 0),
+            "brier": bucket_brier,
+            "accuracy": worst_payload.get("accuracy"),
+            "brier_delta_vs_overall": (
+                float(bucket_brier - overall_brier)
+                if isinstance(overall_brier, (int, float))
+                else None
+            ),
+        }
+
+    return {
+        "total_error_count": int(total_errors),
+        "min_bucket_samples": ERROR_DIAGNOSTIC_MIN_BUCKET_SAMPLES,
+        "highest_error_rate_confidence_bucket": highest_error_rate_bucket,
+        "largest_error_share_confidence_bucket": largest_error_share_bucket,
+        "worst_seed_gap_bucket_by_brier": worst_seed_gap_bucket,
+    }
+
+
+def _build_error_decomposition_for_gender(
+    *,
+    gender_key: str,
+    feature_df: pd.DataFrame,
+    split_probabilities: dict[str, dict[str, np.ndarray]],
+) -> dict[str, Any]:
+    by_split: dict[str, Any] = {}
+
+    for split_label in CANONICAL_SPLITS:
+        split_key = split_label.lower()
+        split_df = feature_df[feature_df["Split"] == split_label].copy()
+        split_cache = split_probabilities.get(split_label, {}) if isinstance(split_probabilities, dict) else {}
+        y_true = np.asarray(split_cache.get("y_true", np.asarray([], dtype=float)), dtype=float)
+        y_prob = np.asarray(split_cache.get("y_prob", np.asarray([], dtype=float)), dtype=float)
+
+        split_payload: dict[str, Any] = {
+            "overall": _summarize_probability_slice(y_true, y_prob),
+            "confidence_buckets": {},
+            "overconfident_misses": {
+                "threshold": OVERCONFIDENT_THRESHOLD,
+                "sample_count": 0,
+                "error_count": 0,
+                "error_rate": None,
+                "avg_confidence": None,
+                "reason": "slice_empty" if y_true.shape[0] == 0 else None,
+            },
+            "seed_gap_buckets": {},
+            "diagnostics": {},
+        }
+
+        if y_true.shape[0] == 0 or split_df.empty:
+            for bucket_name, _, _ in ERROR_BUCKET_DEFINITIONS:
+                split_payload["confidence_buckets"][bucket_name] = {
+                    "sample_count": 0,
+                    "error_count": 0,
+                    "error_rate": None,
+                    "error_share": None,
+                    "avg_prob": None,
+                    "actual_rate": None,
+                    "reason": "slice_empty",
+                }
+            for bucket_name in (*DRIFT_REGIME_ORDER, "unknown"):
+                split_payload["seed_gap_buckets"][bucket_name] = {
+                    "sample_count": 0,
+                    "accuracy": None,
+                    "brier": None,
+                    "brier_delta_vs_overall": None,
+                    "accuracy_delta_vs_overall": None,
+                    "pred_mean": None,
+                    "actual_rate": None,
+                    "reason": "slice_empty",
+                }
+            split_payload["diagnostics"] = _build_error_split_diagnostics(
+                overall_payload=split_payload["overall"],
+                confidence_buckets=split_payload["confidence_buckets"],
+                seed_gap_buckets=split_payload["seed_gap_buckets"],
+            )
+            by_split[split_key] = split_payload
+            continue
+
+        split_prob_series = pd.Series(y_prob, index=split_df.index, dtype=float)
+        pred_label = (y_prob >= 0.5).astype(int)
+        model_confidence = np.maximum(y_prob, 1.0 - y_prob)
+        overconfident_mask = (model_confidence >= OVERCONFIDENT_THRESHOLD) & (pred_label != y_true.astype(int))
+
+        if np.any(overconfident_mask):
+            split_payload["overconfident_misses"] = {
+                "threshold": OVERCONFIDENT_THRESHOLD,
+                "sample_count": int(np.sum(overconfident_mask)),
+                "error_count": int(np.sum(overconfident_mask)),
+                "error_rate": 1.0,
+                "avg_confidence": float(np.mean(model_confidence[overconfident_mask])),
+                "reason": None,
+            }
+        else:
+            split_payload["overconfident_misses"] = {
+                "threshold": OVERCONFIDENT_THRESHOLD,
+                "sample_count": 0,
+                "error_count": 0,
+                "error_rate": 0.0,
+                "avg_confidence": None,
+                "reason": None,
+            }
+
+        for bucket_name, lower_bound, upper_bound in ERROR_BUCKET_DEFINITIONS:
+            mask = np.ones(y_prob.shape[0], dtype=bool)
+            if lower_bound is not None:
+                mask &= y_prob >= float(lower_bound)
+            if upper_bound is not None:
+                mask &= y_prob < float(upper_bound)
+
+            bucket_true = y_true[mask]
+            bucket_prob = y_prob[mask]
+            if bucket_true.shape[0] == 0:
+                split_payload["confidence_buckets"][bucket_name] = {
+                    "sample_count": 0,
+                    "error_count": 0,
+                    "error_rate": None,
+                    "error_share": None,
+                    "avg_prob": None,
+                    "actual_rate": None,
+                    "reason": "bucket_empty",
+                }
+                continue
+
+            bucket_pred = (bucket_prob >= 0.5).astype(int)
+            error_count = int(np.sum(bucket_pred != bucket_true.astype(int)))
+            split_payload["confidence_buckets"][bucket_name] = {
+                "sample_count": int(bucket_true.shape[0]),
+                "error_count": error_count,
+                "error_rate": float(error_count / bucket_true.shape[0]),
+                "error_share": None,
+                "avg_prob": float(np.mean(bucket_prob)),
+                "actual_rate": float(np.mean(bucket_true)),
+                "reason": None,
+            }
+
+        if "SeedNum_diff" in split_df.columns:
+            seed_bucket_series = split_df["SeedNum_diff"].apply(_seed_gap_bucket_from_diff)
+        else:
+            seed_bucket_series = pd.Series(["unknown"] * len(split_df), index=split_df.index)
+
+        for bucket_name in (*DRIFT_REGIME_ORDER, "unknown"):
+            bucket_index = seed_bucket_series[seed_bucket_series == bucket_name].index
+            bucket_true = split_df.loc[bucket_index, "Target"].to_numpy(dtype=float)
+            bucket_prob = split_prob_series.loc[bucket_index].to_numpy(dtype=float)
+            payload = _summarize_probability_slice(bucket_true, bucket_prob)
+            overall_brier = split_payload["overall"].get("brier")
+            overall_accuracy = split_payload["overall"].get("accuracy")
+            payload["brier_delta_vs_overall"] = (
+                float(payload["brier"] - overall_brier)
+                if isinstance(payload.get("brier"), (int, float)) and isinstance(overall_brier, (int, float))
+                else None
+            )
+            payload["accuracy_delta_vs_overall"] = (
+                float(payload["accuracy"] - overall_accuracy)
+                if isinstance(payload.get("accuracy"), (int, float)) and isinstance(overall_accuracy, (int, float))
+                else None
+            )
+            split_payload["seed_gap_buckets"][bucket_name] = payload
+
+        total_errors = sum(
+            int(payload.get("error_count") or 0)
+            for payload in split_payload["confidence_buckets"].values()
+            if isinstance(payload, dict)
+        )
+        for payload in split_payload["confidence_buckets"].values():
+            if not isinstance(payload, dict):
+                continue
+            error_count = int(payload.get("error_count") or 0)
+            payload["error_share"] = float(error_count / total_errors) if total_errors > 0 else None
+
+        split_payload["diagnostics"] = _build_error_split_diagnostics(
+            overall_payload=split_payload["overall"],
+            confidence_buckets=split_payload["confidence_buckets"],
+            seed_gap_buckets=split_payload["seed_gap_buckets"],
+        )
+
+        by_split[split_key] = split_payload
+
+    return by_split
+
+
 def _calibrate_probability_vectors(
     *,
     method: str,
@@ -2337,6 +6726,38 @@ def _build_calibration_policy_for_gender(
     }
 
 
+def _build_calibration_candidate_split_probabilities(
+    *,
+    val_true: np.ndarray,
+    val_prob: np.ndarray,
+    test_true: np.ndarray,
+    test_prob: np.ndarray,
+) -> dict[str, dict[str, dict[str, np.ndarray]]]:
+    by_method: dict[str, dict[str, dict[str, np.ndarray]]] = {}
+
+    for method in CALIBRATION_POLICY_METHODS:
+        adjusted_val, adjusted_test, availability_reason = _calibrate_probability_vectors(
+            method=method,
+            val_true=val_true,
+            val_prob=val_prob,
+            test_prob=test_prob,
+        )
+        if availability_reason is not None or adjusted_val is None or adjusted_test is None:
+            continue
+        by_method[str(method)] = {
+            "Val": {
+                "y_true": np.asarray(val_true, dtype=float),
+                "y_prob": np.asarray(adjusted_val, dtype=float),
+            },
+            "Test": {
+                "y_true": np.asarray(test_true, dtype=float),
+                "y_prob": np.asarray(adjusted_test, dtype=float),
+            },
+        }
+
+    return by_method
+
+
 def _build_governance_decision_for_gender(
     *,
     gender_key: str,
@@ -2508,6 +6929,243 @@ def _build_governance_decision_report(
     }
 
 
+def _resolve_season_backtest_report_path(context: dict[str, Any]) -> Path | None:
+    explicit = context.get("season_backtest_report")
+    if isinstance(explicit, str) and explicit.strip():
+        path = Path(explicit)
+        if path.exists():
+            return path
+
+    reports_dir = PIPELINE_DIR / "artifacts" / "reports"
+    candidates = sorted(reports_dir.glob("season_backtest_*.json"))
+    if candidates:
+        return candidates[-1]
+    return None
+
+
+def _build_weighted_backtest_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    passed_rows = [row for row in rows if row.get("status") == "passed"]
+    usable_rows: list[dict[str, Any]] = []
+    for rank, row in enumerate(sorted(passed_rows, key=lambda item: int(item.get("season", 0))), start=1):
+        metrics = row.get("metrics", {}) if isinstance(row.get("metrics", {}), dict) else {}
+        row_counts = row.get("row_counts", {}) if isinstance(row.get("row_counts", {}), dict) else {}
+        test_brier = _as_float_or_none(metrics.get("test_brier"))
+        test_rows = int(row_counts.get("test") or 0)
+        if test_brier is None:
+            continue
+        weight = float(max(test_rows, 1) * rank)
+        usable_rows.append(
+            {
+                "season": int(row.get("season", 0)),
+                "test_brier": test_brier,
+                "test_rows": test_rows,
+                "weight": weight,
+            }
+        )
+
+    if not usable_rows:
+        return {
+            "status": "skipped",
+            "reason": "no_passed_backtest_rows",
+            "weighted_mean_brier": None,
+            "weighted_std_brier": None,
+            "total_weight": 0.0,
+            "rows": [],
+        }
+
+    weights = np.asarray([row["weight"] for row in usable_rows], dtype=float)
+    briers = np.asarray([row["test_brier"] for row in usable_rows], dtype=float)
+    weighted_mean = float(np.average(briers, weights=weights))
+    weighted_var = float(np.average((briers - weighted_mean) ** 2, weights=weights))
+
+    return {
+        "status": "passed",
+        "reason": None,
+        "weighted_mean_brier": weighted_mean,
+        "weighted_std_brier": float(np.sqrt(max(weighted_var, 0.0))),
+        "total_weight": float(np.sum(weights)),
+        "rows": usable_rows,
+    }
+
+
+def _build_multi_season_weighted_promotion_gate(
+    *,
+    context: dict[str, Any],
+    current_snapshot: dict[str, Any],
+    baseline_metadata: dict[str, Any] | None,
+) -> dict[str, Any]:
+    backtest_path = _resolve_season_backtest_report_path(context)
+    current_profile = _normalize_profile_name(context.get("training_profile"))
+    if baseline_metadata is None:
+        return {
+            "run_id": context.get("run_id"),
+            "generated_at": _now_utc_iso(),
+            "status": "skipped",
+            "reason": "no_baseline_run",
+            "backtest_report_json": str(backtest_path) if backtest_path is not None else None,
+            "config": {
+                "training_profile": current_profile,
+            },
+            "by_gender": {},
+            "aggregate": {"decision": "hold_baseline"},
+        }
+
+    if backtest_path is None:
+        return {
+            "run_id": context.get("run_id"),
+            "generated_at": _now_utc_iso(),
+            "status": "skipped",
+            "reason": "backtest_report_missing",
+            "backtest_report_json": None,
+            "config": {
+                "training_profile": current_profile,
+            },
+            "by_gender": {},
+            "aggregate": {"decision": "hold_baseline"},
+        }
+
+    try:
+        backtest_payload = json.loads(backtest_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {
+            "run_id": context.get("run_id"),
+            "generated_at": _now_utc_iso(),
+            "status": "skipped",
+            "reason": "backtest_report_unreadable",
+            "backtest_report_json": str(backtest_path),
+            "config": {
+                "training_profile": current_profile,
+            },
+            "by_gender": {},
+            "aggregate": {"decision": "hold_baseline"},
+        }
+
+    backtest_config = backtest_payload.get("config", {}) if isinstance(backtest_payload, dict) else {}
+    backtest_profile = _normalize_profile_name(
+        backtest_config.get("profile") if isinstance(backtest_config, dict) else None
+    )
+    if (
+        current_profile is not None
+        and backtest_profile is not None
+        and current_profile != backtest_profile
+    ):
+        return {
+            "run_id": context.get("run_id"),
+            "generated_at": _now_utc_iso(),
+            "status": "skipped",
+            "reason": "backtest_profile_mismatch",
+            "backtest_report_json": str(backtest_path),
+            "config": {
+                "training_profile": current_profile,
+                "backtest_profile": backtest_profile,
+            },
+            "by_gender": {},
+            "aggregate": {"decision": "hold_baseline"},
+        }
+
+    baseline_snapshot = _extract_run_snapshot(baseline_metadata.get("stage_outputs", {}))
+    by_gender: dict[str, Any] = {}
+    aggregate_weighted_delta_vs_baseline_terms: list[tuple[float, float]] = []
+    aggregate_weighted_delta_vs_history_terms: list[tuple[float, float]] = []
+    eligible_genders: list[str] = []
+
+    backtest_by_gender = backtest_payload.get("by_gender", {}) if isinstance(backtest_payload, dict) else {}
+    for gender_key in ("men", "women"):
+        gender_rows = backtest_by_gender.get(gender_key, {}).get("rows", []) if isinstance(backtest_by_gender, dict) else []
+        summary = _build_weighted_backtest_summary(gender_rows if isinstance(gender_rows, list) else [])
+
+        current_brier = current_snapshot.get("metrics", {}).get(gender_key, {}).get("brier")
+        baseline_brier = baseline_snapshot.get("metrics", {}).get(gender_key, {}).get("brier")
+        delta_vs_baseline = _safe_delta(current_brier, baseline_brier)
+        delta_vs_history = _safe_delta(current_brier, summary.get("weighted_mean_brier"))
+        reason_codes: list[str] = []
+
+        if summary.get("status") != "passed":
+            promotion_status = "skipped"
+            reason_codes.append(str(summary.get("reason")))
+        else:
+            if delta_vs_baseline is not None and delta_vs_baseline <= REGRESSION_NUMERIC_EPS - WEIGHTED_PROMOTION_MIN_IMPROVEMENT:
+                reason_codes.append("improves_vs_baseline")
+            elif delta_vs_baseline is not None and delta_vs_baseline > REGRESSION_NUMERIC_EPS:
+                reason_codes.append("degrades_vs_baseline")
+
+            if delta_vs_history is not None and delta_vs_history <= REGRESSION_NUMERIC_EPS:
+                reason_codes.append("beats_weighted_history")
+            elif delta_vs_history is not None:
+                reason_codes.append("worse_than_weighted_history")
+
+            promotion_status = (
+                "eligible"
+                if delta_vs_baseline is not None
+                and delta_vs_baseline <= REGRESSION_NUMERIC_EPS - WEIGHTED_PROMOTION_MIN_IMPROVEMENT
+                and delta_vs_history is not None
+                and delta_vs_history <= REGRESSION_NUMERIC_EPS
+                else "blocked"
+            )
+
+        if promotion_status == "eligible":
+            eligible_genders.append(gender_key)
+
+        total_weight = float(summary.get("total_weight") or 0.0)
+        if isinstance(delta_vs_baseline, (int, float)) and total_weight > 0:
+            aggregate_weighted_delta_vs_baseline_terms.append((float(delta_vs_baseline), total_weight))
+        if isinstance(delta_vs_history, (int, float)) and total_weight > 0:
+            aggregate_weighted_delta_vs_history_terms.append((float(delta_vs_history), total_weight))
+
+        by_gender[gender_key] = {
+            "promotion_status": promotion_status,
+            "reason_codes": sorted(set(reason_codes)),
+            "current_test_brier": current_brier,
+            "baseline_test_brier": baseline_brier,
+            "delta_vs_baseline": delta_vs_baseline,
+            "weighted_historical_mean_brier": summary.get("weighted_mean_brier"),
+            "weighted_historical_std_brier": summary.get("weighted_std_brier"),
+            "delta_vs_weighted_history": delta_vs_history,
+            "history_rows": summary.get("rows", []),
+            "history_row_count": int(len(summary.get("rows", []))),
+            "history_total_weight": total_weight,
+        }
+
+    def _weighted_average(pairs: list[tuple[float, float]]) -> float | None:
+        if not pairs:
+            return None
+        values = np.asarray([pair[0] for pair in pairs], dtype=float)
+        weights = np.asarray([pair[1] for pair in pairs], dtype=float)
+        return float(np.average(values, weights=weights))
+
+    aggregate_delta_vs_baseline = _weighted_average(aggregate_weighted_delta_vs_baseline_terms)
+    aggregate_delta_vs_history = _weighted_average(aggregate_weighted_delta_vs_history_terms)
+    all_genders_eligible = len(eligible_genders) == 2
+    aggregate_decision = (
+        "promote_candidate"
+        if all_genders_eligible
+        and isinstance(aggregate_delta_vs_baseline, (int, float))
+        and aggregate_delta_vs_baseline <= REGRESSION_NUMERIC_EPS - WEIGHTED_PROMOTION_MIN_IMPROVEMENT
+        else "hold_baseline"
+    )
+
+    return {
+        "run_id": context.get("run_id"),
+        "generated_at": _now_utc_iso(),
+        "status": "passed",
+        "reason": None,
+        "backtest_report_json": str(backtest_path),
+        "config": {
+            "training_profile": current_profile,
+            "backtest_profile": backtest_profile,
+            "weighting": "linear_recency_x_test_rows",
+            "min_improvement": WEIGHTED_PROMOTION_MIN_IMPROVEMENT,
+        },
+        "by_gender": by_gender,
+        "aggregate": {
+            "decision": aggregate_decision,
+            "eligible_genders": eligible_genders,
+            "weighted_delta_vs_baseline": aggregate_delta_vs_baseline,
+            "weighted_delta_vs_history": aggregate_delta_vs_history,
+        },
+    }
+
+
 def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
     train_result = context.get("stage_outputs", {}).get("train", {})
     metrics_by_split = train_result.get("metrics_by_split", {})
@@ -2520,43 +7178,10 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError("Train stage output missing genders contract required for calibration scoring.")
 
     metrics_table: list[dict[str, Any]] = []
-    for gender_key in ("men", "women"):
-        gender_metrics = metrics_by_split.get(gender_key, {})
-        for split_label in CANONICAL_SPLITS:
-            split_metrics = gender_metrics.get(split_label, {})
-            metrics_table.append(
-                {
-                    "gender": gender_key,
-                    "split": split_label,
-                    "brier": split_metrics.get("brier"),
-                    "logloss": split_metrics.get("logloss"),
-                    "auc": split_metrics.get("auc"),
-                }
-            )
-
-    men_test = metrics_by_split.get("men", {}).get("Test", {})
-    women_test = metrics_by_split.get("women", {}).get("Test", {})
-
-    side_by_side_summary = {
-        "men_test_brier": men_test.get("brier"),
-        "women_test_brier": women_test.get("brier"),
-        "delta_test_brier": _safe_delta(men_test.get("brier"), women_test.get("brier")),
-        "men_test_logloss": men_test.get("logloss"),
-        "women_test_logloss": women_test.get("logloss"),
-        "delta_test_logloss": _safe_delta(men_test.get("logloss"), women_test.get("logloss")),
-        "men_test_auc": men_test.get("auc"),
-        "women_test_auc": women_test.get("auc"),
-        "delta_test_auc": _safe_delta(men_test.get("auc"), women_test.get("auc")),
-    }
-
-    calibration_rows: list[dict[str, Any]] = []
-    calibration_summary: dict[str, dict[str, Any]] = {"men": {}, "women": {}}
+    side_by_side_summary: dict[str, Any] = {}
     governance_importances: dict[str, list[float] | None] = {"men": None, "women": None}
     feature_frames_by_gender: dict[str, pd.DataFrame] = {}
-    split_probabilities: dict[str, dict[str, dict[str, np.ndarray]]] = {"men": {}, "women": {}}
-    drift_split_summary: dict[str, dict[str, Any]] = {"men": {}, "women": {}}
-    drift_regime_summary: dict[str, dict[str, Any]] = {"men": {}, "women": {}}
-    drift_alerts: list[dict[str, Any]] = []
+    baseline_split_probabilities: dict[str, dict[str, dict[str, np.ndarray]]] = {"men": {}, "women": {}}
 
     for gender_key in ("men", "women"):
         gender_payload = genders_payload.get(gender_key)
@@ -2629,6 +7254,127 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
                     split_label=split_label,
                 )
 
+            baseline_split_probabilities[gender_key][split_label] = {
+                "y_true": split_true,
+                "y_prob": split_prob,
+            }
+
+    alternative_model_payload = _build_alternative_model_report(
+        context=context,
+        genders_payload=genders_payload,
+        feature_frames_by_gender=feature_frames_by_gender,
+        split_probabilities=baseline_split_probabilities,
+    )
+    men_combo_followup_payload = _build_men_combo_followup_report(
+        context=context,
+        feature_df=feature_frames_by_gender.get("men", pd.DataFrame()),
+        feature_columns=(
+            genders_payload.get("men", {}).get("feature_snapshot", {}).get("feature_columns", [])
+            if isinstance(genders_payload.get("men", {}), dict)
+            else []
+        ),
+        baseline_split_probabilities=baseline_split_probabilities.get("men", {}),
+        alternative_model_payload=alternative_model_payload,
+    )
+    men_tabpfn_followup_payload = _build_men_tabpfn_followup_report(
+        context=context,
+        feature_df=feature_frames_by_gender.get("men", pd.DataFrame()),
+        feature_columns=(
+            genders_payload.get("men", {}).get("feature_snapshot", {}).get("feature_columns", [])
+            if isinstance(genders_payload.get("men", {}), dict)
+            else []
+        ),
+        baseline_split_probabilities=baseline_split_probabilities.get("men", {}),
+        alternative_model_payload=alternative_model_payload,
+    )
+    blend_candidate_policy_payload = _build_blend_candidate_policy_report(
+        context=context,
+        alternative_model_payload=alternative_model_payload,
+    )
+    men_policy_refinement_payload = _build_men_policy_refinement_report(
+        context=context,
+        feature_df=feature_frames_by_gender.get("men", pd.DataFrame()),
+        feature_columns=(
+            genders_payload.get("men", {}).get("feature_snapshot", {}).get("feature_columns", [])
+            if isinstance(genders_payload.get("men", {}), dict)
+            else []
+        ),
+        baseline_split_probabilities=baseline_split_probabilities.get("men", {}),
+        blend_candidate_policy_payload=blend_candidate_policy_payload,
+    )
+    men_external_prior_policy_payload = _build_men_external_prior_policy_report(
+        context=context,
+        feature_df=feature_frames_by_gender.get("men", pd.DataFrame()),
+        baseline_split_probabilities=baseline_split_probabilities.get("men", {}),
+        blend_candidate_policy_payload=blend_candidate_policy_payload,
+    )
+    men_gate_aware_search_payload = _build_men_gate_aware_search_report(
+        context=context,
+        baseline_split_probabilities=baseline_split_probabilities.get("men", {}),
+        alternative_model_payload=alternative_model_payload,
+        men_external_prior_policy_payload=men_external_prior_policy_payload,
+        men_tabpfn_followup_payload=men_tabpfn_followup_payload,
+    )
+    men_residual_correction_payload = _build_men_residual_correction_report(
+        context=context,
+        feature_df=feature_frames_by_gender.get("men", pd.DataFrame()),
+        baseline_split_probabilities=baseline_split_probabilities.get("men", {}),
+        blend_candidate_policy_payload=blend_candidate_policy_payload,
+        men_external_prior_policy_payload=men_external_prior_policy_payload,
+    )
+    men_regime_routing_payload = _build_men_regime_routing_report(
+        context=context,
+        feature_df=feature_frames_by_gender.get("men", pd.DataFrame()),
+        feature_columns=(
+            genders_payload.get("men", {}).get("feature_snapshot", {}).get("feature_columns", [])
+            if isinstance(genders_payload.get("men", {}), dict)
+            else []
+        ),
+        baseline_split_probabilities=baseline_split_probabilities.get("men", {}),
+        blend_candidate_policy_payload=blend_candidate_policy_payload,
+        men_external_prior_policy_payload=men_external_prior_policy_payload,
+        men_combo_followup_payload=men_combo_followup_payload,
+    )
+    selected_split_probabilities, prediction_policy_payload = _select_prediction_policy_probabilities(
+        context=context,
+        genders_payload=genders_payload,
+        feature_frames_by_gender=feature_frames_by_gender,
+        baseline_split_probabilities=baseline_split_probabilities,
+        blend_candidate_policy_payload=blend_candidate_policy_payload,
+        men_external_prior_policy_payload=men_external_prior_policy_payload,
+        men_combo_followup_payload=men_combo_followup_payload,
+        policy_name=context.get("prediction_policy", "baseline"),
+    )
+    split_probabilities = selected_split_probabilities
+
+    selected_metrics_by_gender: dict[str, dict[str, Any]] = {}
+    calibration_rows: list[dict[str, Any]] = []
+    calibration_summary: dict[str, dict[str, Any]] = {"men": {}, "women": {}}
+    drift_split_summary: dict[str, dict[str, Any]] = {"men": {}, "women": {}}
+    drift_regime_summary: dict[str, dict[str, Any]] = {"men": {}, "women": {}}
+    drift_alerts: list[dict[str, Any]] = []
+
+    for gender_key in ("men", "women"):
+        selected_metrics_by_gender[gender_key] = _score_all_splits_from_split_probabilities(
+            gender_key=gender_key,
+            split_probabilities=selected_split_probabilities.get(gender_key, {}),
+        )
+        for split_label in CANONICAL_SPLITS:
+            split_metrics = selected_metrics_by_gender[gender_key].get(split_label, {})
+            metrics_table.append(
+                {
+                    "gender": gender_key,
+                    "split": split_label,
+                    "brier": split_metrics.get("brier"),
+                    "logloss": split_metrics.get("logloss"),
+                    "auc": split_metrics.get("auc"),
+                }
+            )
+
+            split_cache = selected_split_probabilities.get(gender_key, {}).get(split_label, {})
+            split_true = np.asarray(split_cache.get("y_true", np.asarray([], dtype=float)), dtype=float)
+            split_prob = np.asarray(split_cache.get("y_prob", np.asarray([], dtype=float)), dtype=float)
+
             split_rows, split_summary = _build_calibration_rows_and_summary(
                 gender_key=gender_key,
                 split_label=split_label,
@@ -2637,24 +7383,35 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
             )
             calibration_rows.extend(split_rows)
             calibration_summary[gender_key][split_label] = split_summary
-            split_probabilities[gender_key][split_label] = {
-                "y_true": split_true,
-                "y_prob": split_prob,
-            }
-
             drift_split_summary[gender_key][split_label] = _build_split_drift_summary(
                 y_true=split_true,
                 y_prob=split_prob,
             )
 
             if split_label == "Test":
+                split_df = feature_frames_by_gender.get(gender_key, pd.DataFrame())
+                test_df = split_df[split_df["Split"] == "Test"].copy() if not split_df.empty else split_df
                 regime_summary, regime_alerts = _build_test_regime_drift_summary(
                     gender_key=gender_key,
-                    split_df=split_df,
+                    split_df=test_df,
                     y_prob=split_prob,
                 )
                 drift_regime_summary[gender_key] = regime_summary
                 drift_alerts.extend(regime_alerts)
+
+    men_test = selected_metrics_by_gender.get("men", {}).get("Test", {})
+    women_test = selected_metrics_by_gender.get("women", {}).get("Test", {})
+    side_by_side_summary = {
+        "men_test_brier": men_test.get("brier"),
+        "women_test_brier": women_test.get("brier"),
+        "delta_test_brier": _safe_delta(men_test.get("brier"), women_test.get("brier")),
+        "men_test_logloss": men_test.get("logloss"),
+        "women_test_logloss": women_test.get("logloss"),
+        "delta_test_logloss": _safe_delta(men_test.get("logloss"), women_test.get("logloss")),
+        "men_test_auc": men_test.get("auc"),
+        "women_test_auc": women_test.get("auc"),
+        "delta_test_auc": _safe_delta(men_test.get("auc"), women_test.get("auc")),
+    }
 
     for gender_key in ("men", "women"):
         gap_alert = _build_gap_shift_alert(
@@ -2716,6 +7473,7 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
     }
 
     calibration_policy_by_gender: dict[str, Any] = {}
+    calibration_candidate_split_probabilities_by_gender: dict[str, dict[str, dict[str, dict[str, np.ndarray]]]] = {}
     for gender_key in ("men", "women"):
         val_cache = split_probabilities.get(gender_key, {}).get("Val", {})
         test_cache = split_probabilities.get(gender_key, {}).get("Test", {})
@@ -2723,6 +7481,13 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
         val_prob = np.asarray(val_cache.get("y_prob", np.asarray([], dtype=float)), dtype=float)
         test_true = np.asarray(test_cache.get("y_true", np.asarray([], dtype=float)), dtype=float)
         test_prob = np.asarray(test_cache.get("y_prob", np.asarray([], dtype=float)), dtype=float)
+
+        calibration_candidate_split_probabilities_by_gender[gender_key] = _build_calibration_candidate_split_probabilities(
+            val_true=val_true,
+            val_prob=val_prob,
+            test_true=test_true,
+            test_prob=test_prob,
+        )
 
         calibration_policy_by_gender[gender_key] = _build_calibration_policy_for_gender(
             gender_key=gender_key,
@@ -2768,6 +7533,49 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
         feature_frames_by_gender=feature_frames_by_gender,
         split_probabilities=split_probabilities,
     )
+    feature_branch_payload = _build_feature_branch_report(
+        context=context,
+        train_module=train_module,
+        genders_payload=genders_payload,
+        feature_frames_by_gender=feature_frames_by_gender,
+        split_probabilities=split_probabilities,
+    )
+    stacking_policy_payload = _build_stacking_policy_report(
+        context=context,
+        train_result=train_result,
+        train_module=train_module,
+        feature_frames_by_gender=feature_frames_by_gender,
+        split_probabilities=split_probabilities,
+        calibration_candidate_split_probabilities_by_gender=calibration_candidate_split_probabilities_by_gender,
+    )
+
+    error_decomposition_by_gender = {
+        gender_key: _build_error_decomposition_for_gender(
+            gender_key=gender_key,
+            feature_df=feature_frames_by_gender.get(gender_key, pd.DataFrame()),
+            split_probabilities=split_probabilities.get(gender_key, {}),
+        )
+        for gender_key in ("men", "women")
+    }
+    error_decomposition_report_payload = {
+        "run_id": context["run_id"],
+        "seed": context["seed"],
+        "generated_at": _now_utc_iso(),
+        "config": {
+            "confidence_buckets": [bucket_name for bucket_name, _, _ in ERROR_BUCKET_DEFINITIONS],
+            "diagnostic_min_bucket_samples": ERROR_DIAGNOSTIC_MIN_BUCKET_SAMPLES,
+            "overconfident_threshold": OVERCONFIDENT_THRESHOLD,
+            "seed_gap_buckets": list(DRIFT_REGIME_ORDER),
+        },
+        "by_gender": error_decomposition_by_gender,
+    }
+    error_decomposition_report_path = Path(context["run_dir"]) / "error_decomposition_report.json"
+    _write_json(error_decomposition_report_path, error_decomposition_report_payload)
+    error_decomposition_payload = {
+        "report_json": str(error_decomposition_report_path),
+        "config": error_decomposition_report_payload["config"],
+        "by_gender": error_decomposition_by_gender,
+    }
 
     governance_module = _load_feature_governance_module()
     governance_rows = governance_module.build_governance_ledger_rows(
@@ -3007,12 +7815,25 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
         "generated_at": _now_utc_iso(),
         "models": train_result.get("models", {}),
         "feature_snapshot": train_result.get("feature_snapshot", {}),
+        "prediction_policy": prediction_policy_payload,
         "metrics_table": metrics_table,
         "side_by_side_summary": side_by_side_summary,
         "calibration": calibration_payload,
         "drift": drift_payload,
         "calibration_policy": calibration_policy_payload,
         "ensemble": ensemble_payload,
+        "alternative_model": alternative_model_payload,
+        "men_combo_followup": men_combo_followup_payload,
+        "men_tabpfn_followup": men_tabpfn_followup_payload,
+        "blend_candidate_policy": blend_candidate_policy_payload,
+        "men_policy_refinement": men_policy_refinement_payload,
+        "men_external_prior_policy": men_external_prior_policy_payload,
+        "men_gate_aware_search": men_gate_aware_search_payload,
+        "men_residual_correction": men_residual_correction_payload,
+        "men_regime_routing": men_regime_routing_payload,
+        "feature_branch": feature_branch_payload,
+        "stacking_policy": stacking_policy_payload,
+        "error_decomposition": error_decomposition_payload,
         "governance": governance_payload,
         "governance_decision": governance_decision_payload,
     }
@@ -3022,10 +7843,25 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "eval_report": str(report_path),
+        "prediction_policy": prediction_policy_payload,
+        "metrics_table": metrics_table,
+        "side_by_side_summary": side_by_side_summary,
         "calibration": calibration_payload,
         "drift": drift_payload,
         "calibration_policy": calibration_policy_payload,
         "ensemble": ensemble_payload,
+        "alternative_model": alternative_model_payload,
+        "men_combo_followup": men_combo_followup_payload,
+        "men_tabpfn_followup": men_tabpfn_followup_payload,
+        "blend_candidate_policy": blend_candidate_policy_payload,
+        "men_policy_refinement": men_policy_refinement_payload,
+        "men_external_prior_policy": men_external_prior_policy_payload,
+        "men_gate_aware_search": men_gate_aware_search_payload,
+        "men_residual_correction": men_residual_correction_payload,
+        "men_regime_routing": men_regime_routing_payload,
+        "feature_branch": feature_branch_payload,
+        "stacking_policy": stacking_policy_payload,
+        "error_decomposition": error_decomposition_payload,
         "governance": governance_payload,
         "governance_decision": governance_decision_payload,
     }
@@ -3043,10 +7879,48 @@ def stage_artifact(context: dict[str, Any]) -> dict[str, Any]:
         eval_output.get("calibration_policy", {}) if isinstance(eval_output.get("calibration_policy", {}), dict) else {}
     )
     ensemble_output = eval_output.get("ensemble", {}) if isinstance(eval_output.get("ensemble", {}), dict) else {}
+    alternative_model_output = (
+        eval_output.get("alternative_model", {}) if isinstance(eval_output.get("alternative_model", {}), dict) else {}
+    )
+    men_combo_followup_output = (
+        eval_output.get("men_combo_followup", {})
+        if isinstance(eval_output.get("men_combo_followup", {}), dict)
+        else {}
+    )
+    men_tabpfn_followup_output = (
+        eval_output.get("men_tabpfn_followup", {})
+        if isinstance(eval_output.get("men_tabpfn_followup", {}), dict)
+        else {}
+    )
+    blend_candidate_policy_output = (
+        eval_output.get("blend_candidate_policy", {})
+        if isinstance(eval_output.get("blend_candidate_policy", {}), dict)
+        else {}
+    )
+    men_policy_refinement_output = (
+        eval_output.get("men_policy_refinement", {})
+        if isinstance(eval_output.get("men_policy_refinement", {}), dict)
+        else {}
+    )
+    men_external_prior_policy_output = (
+        eval_output.get("men_external_prior_policy", {})
+        if isinstance(eval_output.get("men_external_prior_policy", {}), dict)
+        else {}
+    )
+    men_gate_aware_search_output = (
+        eval_output.get("men_gate_aware_search", {})
+        if isinstance(eval_output.get("men_gate_aware_search", {}), dict)
+        else {}
+    )
     governance_output = eval_output.get("governance", {}) if isinstance(eval_output.get("governance", {}), dict) else {}
     governance_decision_output = (
         eval_output.get("governance_decision", {})
         if isinstance(eval_output.get("governance_decision", {}), dict)
+        else {}
+    )
+    error_decomposition_output = (
+        eval_output.get("error_decomposition", {})
+        if isinstance(eval_output.get("error_decomposition", {}), dict)
         else {}
     )
     governance_artifacts = (
@@ -3063,6 +7937,14 @@ def stage_artifact(context: dict[str, Any]) -> dict[str, Any]:
         "drift_regime_report_json": drift_output.get("report_json"),
         "calibration_policy_report_json": calibration_policy_output.get("report_json"),
         "ensemble_report_json": ensemble_output.get("report_json"),
+        "alternative_model_report_json": alternative_model_output.get("report_json"),
+        "men_combo_followup_report_json": men_combo_followup_output.get("report_json"),
+        "men_tabpfn_followup_report_json": men_tabpfn_followup_output.get("report_json"),
+        "blend_candidate_policy_report_json": blend_candidate_policy_output.get("report_json"),
+        "men_policy_refinement_report_json": men_policy_refinement_output.get("report_json"),
+        "men_external_prior_policy_report_json": men_external_prior_policy_output.get("report_json"),
+        "men_gate_aware_search_report_json": men_gate_aware_search_output.get("report_json"),
+        "error_decomposition_report_json": error_decomposition_output.get("report_json"),
         "governance_ledger_csv": governance_artifacts.get("ledger_csv"),
         "ablation_report_json": governance_artifacts.get("ablation_report_json"),
         "governance_decision_report_json": governance_decision_output.get("report_json"),
@@ -3132,6 +8014,14 @@ def stage_artifact(context: dict[str, Any]) -> dict[str, Any]:
     )
     regression_path = run_dir / "regression_gate_report.json"
     _write_json(regression_path, regression_payload)
+
+    weighted_promotion_gate_payload = _build_multi_season_weighted_promotion_gate(
+        context=context,
+        current_snapshot=current_snapshot,
+        baseline_metadata=regression_baseline,
+    )
+    weighted_promotion_gate_path = run_dir / "multi_season_weighted_gate_report.json"
+    _write_json(weighted_promotion_gate_path, weighted_promotion_gate_payload)
 
     policy_gate_payload = {
         "run_id": context["run_id"],
@@ -3255,6 +8145,10 @@ def stage_artifact(context: dict[str, Any]) -> dict[str, Any]:
                 "status": policy_gate_payload.get("regression_status"),
                 "report_json": str(policy_gate_path),
             },
+            "weighted_promotion_gate": {
+                "status": weighted_promotion_gate_payload.get("status"),
+                "report_json": str(weighted_promotion_gate_path),
+            },
             "submission": {
                 "status": submission_payload.get("status"),
                 "report_json": submission_payload.get("validation_report_json"),
@@ -3290,6 +8184,12 @@ def stage_artifact(context: dict[str, Any]) -> dict[str, Any]:
         "policy_gate": {
             "status": policy_gate_payload.get("regression_status"),
             "report_json": str(policy_gate_path),
+        },
+        "weighted_promotion_gate": {
+            "status": weighted_promotion_gate_payload.get("status"),
+            "report_json": str(weighted_promotion_gate_path),
+            "decision": weighted_promotion_gate_payload.get("aggregate", {}).get("decision"),
+            "backtest_report_json": weighted_promotion_gate_payload.get("backtest_report_json"),
         },
         "submission": {
             "status": submission_payload.get("status"),
@@ -3350,6 +8250,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="quality_v1",
         help="Target profile namespace for HPO candidate search",
     )
+    parser.add_argument(
+        "--prediction-policy",
+        type=str,
+        choices=PREDICTION_POLICIES,
+        default="baseline",
+        help="Eval-time probability policy; baseline preserves canonical scoring, blend_candidate_v1 applies the research blend",
+    )
     return parser.parse_args(argv)
 
 
@@ -3365,6 +8272,7 @@ def main(argv: list[str] | None = None) -> int:
     context["training_profile"] = args.training_profile
     context["hpo_trials"] = int(args.hpo_trials)
     context["hpo_target_profile"] = args.hpo_target_profile
+    context["prediction_policy"] = args.prediction_policy
 
     run_dir = Path(context["run_dir"])
     run_dir.mkdir(parents=True, exist_ok=True)

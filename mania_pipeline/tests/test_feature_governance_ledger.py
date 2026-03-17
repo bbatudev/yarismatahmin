@@ -97,3 +97,13 @@ def test_build_governance_summary_returns_domain_counts():
 
     assert summary["row_count"] == len(rows)
     assert set(summary["default_action_counts"].keys()) == set(module.DEFAULT_ACTION_DOMAIN)
+
+
+def test_infer_feature_group_classifies_m005_s04_features_as_rating():
+    module = _load_module()
+
+    assert module.infer_feature_group("PythWR_diff") == "rating"
+    assert module.infer_feature_group("Luck_diff") == "rating"
+    assert module.infer_feature_group("MasseyPctSpread_diff") == "rating"
+    assert module.infer_feature_group("StyleClash_eFG_BlkPct_diff") == "style"
+    assert module.infer_feature_group("SeedPythMispricing_diff") == "seed"

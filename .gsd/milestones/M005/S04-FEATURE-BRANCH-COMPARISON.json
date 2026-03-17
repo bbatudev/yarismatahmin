@@ -1,0 +1,63 @@
+{
+  "milestone": "M005",
+  "slice": "S04",
+  "generated_at": "2026-03-16",
+  "summary": {
+    "decision": "hold_full_feature_branch",
+    "women_status": "hold_baseline",
+    "men_surviving_candidate": "luck_only"
+  },
+  "runs": {
+    "full_package": {
+      "run_id": "20260316T172000Z_m005_s04_smoke",
+      "result": "regression_gate_failed"
+    },
+    "feature_branch": {
+      "run_id": "20260316T172927Z_m005_s04_feature_branch_smoke",
+      "aggregate_decision": "hold_current_feature_branch",
+      "men_best_variant_id": "legacy_baseline",
+      "women_best_variant_id": "legacy_baseline"
+    },
+    "style_clash": {
+      "run_id": "20260316T173658Z_m005_s04_style_clash_smoke",
+      "aggregate_decision": "hold_current_feature_branch",
+      "men_best_variant_id": "legacy_baseline",
+      "women_best_variant_id": "legacy_baseline"
+    },
+    "seed_mispricing": {
+      "run_id": "20260316T174122Z_m005_s04_seed_mispricing_smoke",
+      "aggregate_decision": "research_followup_variants",
+      "promising_genders": [
+        "men"
+      ]
+    },
+    "men_followup": {
+      "run_id": "20260316T174519Z_m005_s04_men_followup_smoke",
+      "aggregate_decision": "research_followup_variants",
+      "promising_genders": [
+        "men"
+      ],
+      "men": {
+        "best_variant_id": "luck_only",
+        "legacy_baseline": {
+          "val_brier": 0.20591347061475848,
+          "test_brier": 0.18623398593102922,
+          "test_auc": 0.8070839830697261,
+          "test_ece": 0.07179319155177319
+        },
+        "luck_only": {
+          "val_brier": 0.20184204526834426,
+          "test_brier": 0.1821890782227556,
+          "test_auc": 0.8067776787703275,
+          "test_ece": 0.05213078990586132
+        },
+        "luck_seed_mispricing": {
+          "val_brier": 0.20584153261130603,
+          "test_brier": 0.17975485077243838,
+          "test_auc": 0.8153263533080864,
+          "test_ece": 0.05069696857872164
+        }
+      }
+    }
+  }
+}
