@@ -4,22 +4,42 @@ Kaggle March Machine Learning Mania 2026 için geliştirilen, **canonical** ve d
 
 ---
 
-## ✅ Güncel Durum (M004 Sonu)
+## ✅ Güncel Durum (M005 Sonu / Kaggle Hazırlık Fazı)
 
 - Canonical akış aktif: `feature -> train -> eval_report -> artifact`
-- Test durumu: **59/59 passed**
-- Final readiness: **ready**
-- Submission validation (stage2): **passed**
-- Final karar: **no_promotion** (M003 baseline performans referansı korunuyor)
+- Pipeline hâlâ submission-ready omurga olarak çalışıyor
+- Weighted gate, error decomposition, stacking, feature branching, alternative model benchmark ve men-side policy araştırmaları repo içine script-first bağlandı
+- Araştırma fazı büyük ölçüde tamamlandı; ana faz artık **final recipe + Kaggle packaging**
 
-### M003 baseline vs M004 final kıyas
-(Brier: düşük daha iyi)
+### Mevcut stratejik sonuç
 
-- **Men Brier:** `0.1817505 -> 0.1833199` (**+0.001569**, yaklaşık **%0.86 kötüleşme**)
-- **Women Brier:** `0.1422320 -> 0.1421470` (**-0.000085**, yaklaşık **%0.06 iyileşme**)
-- Basit ortalama Brier değişimi: yaklaşık **%0.46 kötüleşme**
+- **Women:** güçlü non-baseline adaylar bulundu
+  - önce `0.6 LGBM + 0.4 HistGB`
+  - daha sonra `TabPFN` ve `spline_logistic` ailesi çok güçlü research sinyali verdi
+- **Men:** çok sayıda eksen denendi ama clean promotion adayı çıkmadı
+  - feature branch
+  - blend refinement
+  - external-prior / disagreement policy
+  - XGBoost / CatBoost / multi-model combos
+  - residual correction
+  - regime routing
+  - TabPFN follow-up
+  - gate-aware search
+- En güçlü men discipline-safe çizgi şu anda:
+  - **`0.5 LGBM + 0.5 HistGB`**
 
-Bu yüzden model promote edilmedi; sadece güvenilirlik/karar mekanizması iyileştirmeleri tutuldu.
+### M005 final okuma
+
+- Pipeline problemi büyük ölçüde çözüldü
+- Asıl sınır artık **signal saturation / limited incremental lift**
+- Women tarafı research açısından daha verimli çıktı
+- Men tarafında ham sinyal bulundu ama bunu canonical, calibration-safe promotion’a çevirmek mümkün olmadı
+- Bu yüzden repo’nun doğal devamı artık:
+  - final recipe seçimi
+  - local final dry-run
+  - Kaggle-format packaging
+  - Kaggle smoke
+  - final submit
 
 ### Season-by-season backtest (2018–2025, quality_v1)
 
@@ -58,11 +78,18 @@ ML_March_Mania2026_NCAA/
 │   └── artifacts/
 └── .gsd/
     └── milestones/
-        └── M004/
-            ├── M004-SUMMARY.md
-            ├── S01-BENCHMARK-COMPARISON.json
-            ├── S03-BENCHMARK-COMPARISON.json
-            └── S04-FINAL-COMPARISON.json
+        ├── M004/
+        │   ├── M004-SUMMARY.md
+        │   ├── S01-BENCHMARK-COMPARISON.json
+        │   ├── S03-BENCHMARK-COMPARISON.json
+        │   └── S04-FINAL-COMPARISON.json
+        └── M005/
+            ├── M005-SUMMARY.md
+            ├── S04-FEATURE-BRANCH-COMPARISON.json
+            ├── S05-BLEND-FOLLOWUP.json
+            ├── S06-MEN-POLICY-FOLLOWUP.json
+            ├── S07-MEN-COMBO-FOLLOWUP.json
+            └── S09-MEN-REGIME-ROUTING-FOLLOWUP.json
 ```
 
 ---
@@ -100,7 +127,14 @@ conda activate march_mania
 python mania_pipeline/scripts/run_pipeline.py --seed 42 --run-label local_smoke
 ```
 
-### M004 final smoke (submission dahil)
+### Canonical research smoke
+```bash
+python mania_pipeline/scripts/run_pipeline.py \
+  --seed 42 \
+  --run-label local_smoke
+```
+
+### Submission-ready smoke
 ```bash
 python mania_pipeline/scripts/run_pipeline.py \
   --seed 42 \
@@ -108,8 +142,7 @@ python mania_pipeline/scripts/run_pipeline.py \
   --hpo-trials 2 \
   --hpo-target-profile quality_v1 \
   --submission-stage stage2 \
-  --run-label m004_s04_final_freeze \
-  --artifacts-root mania_pipeline/artifacts/runs_m004
+  --run-label final_readiness_smoke
 ```
 
 ### Baseline vs candidate kıyas
@@ -141,6 +174,15 @@ Her run için tipik çıktılar:
 - `artifact_manifest.json`
 - `hpo_report.json` (HPO açıksa)
 - `ensemble_report.json`
+- `alternative_model_report.json`
+- `multi_season_weighted_gate_report.json`
+- `error_decomposition_report.json`
+- `stacking_policy_report.json`
+- `feature_branch_report.json`
+- `men_external_prior_policy_report.json`
+- `men_combo_followup_report.json`
+- `men_tabpfn_followup_report.json`
+- `men_gate_aware_search_report.json`
 - `submission_readiness_report.json`
 - `submission_validation_report.json` (submission açıksa)
 
@@ -158,4 +200,9 @@ Her run için tipik çıktılar:
 
 ## 📈 Not
 
-M004 ile altyapı güvenilirliği ve karar katmanları güçlendirildi (CV-HPO objective, ensemble robustness guard, final freeze proof). Ancak final benchmark kıyasında net performans artışı gelmediği için promotion yapılmadı.
+M005 ile repo artık sıradan notebook topluluğu değil, denetlenebilir bir research + release sistemi haline geldi. En önemli sonuç:
+
+- women tarafında gerçek aday sinyalleri var
+- men tarafında güçlü raw sinyal var ama clean promotion yok
+
+Bu nedenle bundan sonraki değer, yeni küçük model tweak’lerden çok doğru release disiplini ve Kaggle operasyonundan gelecek.
