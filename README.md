@@ -4,42 +4,57 @@ Kaggle March Machine Learning Mania 2026 için geliştirilen, **canonical** ve d
 
 ---
 
-## ✅ Güncel Durum (M005 Sonu / Kaggle Hazırlık Fazı)
+## ✅ Güncel Durum (Final Recipe / Kaggle Submission Hazır)
 
 - Canonical akış aktif: `feature -> train -> eval_report -> artifact`
-- Pipeline hâlâ submission-ready omurga olarak çalışıyor
+- Pipeline artık gerçek Kaggle submission export üretebiliyor
 - Weighted gate, error decomposition, stacking, feature branching, alternative model benchmark ve men-side policy araştırmaları repo içine script-first bağlandı
-- Araştırma fazı büyük ölçüde tamamlandı; ana faz artık **final recipe + Kaggle packaging**
+- Araştırma fazı büyük ölçüde kapandı; aktif faz artık **final recipe + Kaggle packaging**
 
 ### Mevcut stratejik sonuç
 
-- **Women:** güçlü non-baseline adaylar bulundu
-  - önce `0.6 LGBM + 0.4 HistGB`
-  - daha sonra `TabPFN` ve `spline_logistic` ailesi çok güçlü research sinyali verdi
-- **Men:** çok sayıda eksen denendi ama clean promotion adayı çıkmadı
-  - feature branch
-  - blend refinement
-  - external-prior / disagreement policy
-  - XGBoost / CatBoost / multi-model combos
-  - residual correction
-  - regime routing
-  - TabPFN follow-up
-  - gate-aware search
-- En güçlü men discipline-safe çizgi şu anda:
-  - **`0.5 LGBM + 0.5 HistGB`**
+- **Men final policy:** `TabPFN` tabanlı candidate gerçek runtime’a bağlandı
+  - `tabpfn_benchmark: 1.0`
+  - high-probability tail için hafif lift guardrail’i uygulanıyor
+- **Women final policy:** release-safe blend aktif
+  - `spline_logistic_benchmark: 0.75`
+  - `tabpfn_benchmark: 0.25`
+- Ana plumbing fix tamamlandı:
+  - `blend_final_recipe_v1` artık artifact’ta seçilen candidate’ı runtime prediction policy’ye gerçekten bağlıyor
+  - placeholder `0.5` submission writer kaldırıldı
+  - sample submission ID listesinden gerçek hypothetical matchup inference/export geliyor
 
-### M005 final okuma
+### Final release özeti
 
-- Pipeline problemi büyük ölçüde çözüldü
-- Asıl sınır artık **signal saturation / limited incremental lift**
-- Women tarafı research açısından daha verimli çıktı
-- Men tarafında ham sinyal bulundu ama bunu canonical, calibration-safe promotion’a çevirmek mümkün olmadı
-- Bu yüzden repo’nun doğal devamı artık:
-  - final recipe seçimi
-  - local final dry-run
-  - Kaggle-format packaging
-  - Kaggle smoke
-  - final submit
+- Runtime selection bug çözüldü
+- Men tarafında en güçlü candidate gerçekten apply edildi
+- Women tarafında final blend korunarak kaldı
+- Canonical regression gate geçildi
+- Gerçek stage2 submission CSV üretildi
+
+### Son canonical final run
+
+- Run:
+  - `mania_pipeline/artifacts/runs/20260319T030908Z_final_recipe_dry_run_v14_men_tabpfn_tail_lift`
+- Men test Brier:
+  - `0.1703277886080936`
+- Women test Brier:
+  - `0.1208348889006466`
+- Regression gate:
+  - `passed`
+
+### Son gerçek submission export
+
+- Export run:
+  - `mania_pipeline/artifacts/runs/20260319T030908Z_final_recipe_submission_export_v3`
+- Output:
+  - `submission_stage2.csv`
+- Validation summary:
+  - `row_count = 132133`
+  - `min_pred = 0.01359343922477177`
+  - `max_pred = 0.9848704811741474`
+  - `unique_pred_count = 131838`
+  - `exact_half_count = 3`
 
 ### Season-by-season backtest (2018–2025, quality_v1)
 
@@ -134,16 +149,22 @@ python mania_pipeline/scripts/run_pipeline.py \
   --run-label local_smoke
 ```
 
-### Submission-ready smoke
+### Final recipe dry-run
 ```bash
 python mania_pipeline/scripts/run_pipeline.py \
   --seed 42 \
-  --training-profile quality_v1 \
-  --hpo-trials 2 \
-  --hpo-target-profile quality_v1 \
+  --prediction-policy blend_final_recipe_v1 \
   --submission-stage stage2 \
-  --run-label final_readiness_smoke
+  --run-label final_recipe_dry_run
 ```
+
+### Export existing final run to real stage2 submission
+Bu repo’da final recipe seçimi canonical run üzerinde yapılır; gerçek Kaggle CSV export ise bu run context’inden alınır.
+
+- Canonical final dry-run sonrası:
+  - `submission_stage2.csv` gerçek matchup probability’leri ile üretilir
+- Output path örneği:
+  - `mania_pipeline/artifacts/runs/20260319T030908Z_final_recipe_submission_export_v3/submission_stage2.csv`
 
 ### Baseline vs candidate kıyas
 ```bash
@@ -166,7 +187,7 @@ python mania_pipeline/scripts/season_by_season_backtest.py \
 
 ## 📦 Run Artifact’ları
 
-Her run için tipik çıktılar:
+Her canonical run için tipik çıktılar:
 
 - `run_metadata.json`
 - `stage_events.jsonl`
@@ -186,6 +207,11 @@ Her run için tipik çıktılar:
 - `submission_readiness_report.json`
 - `submission_validation_report.json` (submission açıksa)
 
+Final submission export run’ında ayrıca:
+
+- `submission_stage2.csv`
+- `submission_validation_report.json`
+
 ---
 
 ## 🛡️ Kritik Kurallar
@@ -200,9 +226,14 @@ Her run için tipik çıktılar:
 
 ## 📈 Not
 
-M005 ile repo artık sıradan notebook topluluğu değil, denetlenebilir bir research + release sistemi haline geldi. En önemli sonuç:
+Repo artık notebook-first değil, denetlenebilir bir research + release sistemi. Bu aşamadaki en önemli fark:
 
-- women tarafında gerçek aday sinyalleri var
-- men tarafında güçlü raw sinyal var ama clean promotion yok
+- final candidate runtime’a gerçekten bağlanıyor
+- canonical gate ile release kararı veriliyor
+- Kaggle için gerçek CSV export script-first üretiliyor
 
-Bu nedenle bundan sonraki değer, yeni küçük model tweak’lerden çok doğru release disiplini ve Kaggle operasyonundan gelecek.
+Bu nedenle ana değer artık yeni research dalları açmaktan çok:
+
+- final recipe’yi bozmadan korumak
+- gerçek submission export akışını stabil tutmak
+- Kaggle operasyonunu doğru yönetmek

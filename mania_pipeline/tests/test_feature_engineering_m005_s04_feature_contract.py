@@ -145,3 +145,31 @@ def test_build_seed_mispricing_features_emits_expected_columns_by_gender():
     assert {"SeedStrengthScore", "SeedPythMispricing", "SeedNetRtgMispricing", "SeedMasseyMispricing"}.issubset(men.columns)
     assert {"SeedStrengthScore", "SeedPythMispricing", "SeedNetRtgMispricing"}.issubset(women.columns)
     assert "SeedMasseyMispricing" not in women.columns
+
+
+def test_build_submission_matchup_matrix_emits_submission_ready_diff_columns():
+    module = _load_module()
+
+    sample_submission = pd.DataFrame(
+        [
+            {"ID": "2026_1101_1102"},
+            {"ID": "2026_1103_1104"},
+        ]
+    )
+    team_features = pd.DataFrame(
+        [
+            {"Season": 2026, "TeamID": 1101, "SeedNum": 2, "PythWR": 0.88, "eFG": 0.57, "BlkPct": 0.08},
+            {"Season": 2026, "TeamID": 1102, "SeedNum": 7, "PythWR": 0.64, "eFG": 0.50, "BlkPct": 0.11},
+            {"Season": 2026, "TeamID": 1103, "SeedNum": 5, "PythWR": 0.72, "eFG": 0.54, "BlkPct": 0.09},
+            {"Season": 2026, "TeamID": 1104, "SeedNum": 12, "PythWR": 0.55, "eFG": 0.48, "BlkPct": 0.13},
+        ]
+    )
+
+    matchup = module.build_submission_matchup_matrix(sample_submission, team_features, gender="M")
+
+    assert list(matchup["ID"]) == ["2026_1101_1102", "2026_1103_1104"]
+    assert {"SeedNum_diff", "PythWR_diff", "StyleClash_eFG_BlkPct_diff", "Round_Num", "Split"}.issubset(
+        matchup.columns
+    )
+    assert (matchup["Split"] == "Submission").all()
+    assert (matchup["Round_Num"] == 1).all()

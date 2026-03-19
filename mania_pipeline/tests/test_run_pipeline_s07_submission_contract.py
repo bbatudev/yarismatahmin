@@ -71,6 +71,12 @@ def _build_context(tmp_path: Path, run_id: str, submission_stage: str = "none") 
     ensemble_report = _write_json(run_dir / "ensemble_report.json", {"ok": True})
     alternative_model_report = _write_json(run_dir / "alternative_model_report.json", {"ok": True})
     blend_candidate_policy_report = _write_json(run_dir / "blend_candidate_policy_report.json", {"ok": True})
+    men_combo_followup_report = _write_json(run_dir / "men_combo_followup_report.json", {"ok": True})
+    men_tabpfn_followup_report = _write_json(run_dir / "men_tabpfn_followup_report.json", {"ok": True})
+    final_blend_recipe_report = _write_json(run_dir / "final_blend_recipe_report.json", {"ok": True})
+    men_policy_refinement_report = _write_json(run_dir / "men_policy_refinement_report.json", {"ok": True})
+    men_external_prior_policy_report = _write_json(run_dir / "men_external_prior_policy_report.json", {"ok": True})
+    men_gate_aware_search_report = _write_json(run_dir / "men_gate_aware_search_report.json", {"ok": True})
     error_report = _write_json(run_dir / "error_decomposition_report.json", {"ok": True})
     governance_ledger = _write_text(run_dir / "governance_ledger.csv", "feature,group\n")
     governance_decision_report = _write_json(run_dir / "governance_decision_report.json", {"ok": True})
@@ -167,6 +173,12 @@ def _build_context(tmp_path: Path, run_id: str, submission_stage: str = "none") 
                         "women": {"candidate_status": "hold_research_only"},
                     },
                 },
+                "men_combo_followup": {"report_json": str(men_combo_followup_report)},
+                "men_tabpfn_followup": {"report_json": str(men_tabpfn_followup_report)},
+                "final_blend_recipe": {"report_json": str(final_blend_recipe_report)},
+                "men_policy_refinement": {"report_json": str(men_policy_refinement_report)},
+                "men_external_prior_policy": {"report_json": str(men_external_prior_policy_report)},
+                "men_gate_aware_search": {"report_json": str(men_gate_aware_search_report)},
                 "error_decomposition": {
                     "report_json": str(error_report),
                     "by_gender": {
@@ -213,6 +225,16 @@ def test_stage_artifact_generates_submission_and_validates_schema(tmp_path, monk
     sample.to_csv(sample_dir / "SampleSubmissionStage2.csv", index=False)
 
     monkeypatch.setattr(module, "KAGGLE_DATA_DIR", sample_dir, raising=False)
+    monkeypatch.setattr(
+        module,
+        "_build_real_submission_frame",
+        lambda context, sample_df: pd.DataFrame(
+            {
+                "ID": sample_df["ID"].astype(str),
+                "Pred": [0.61, 0.39],
+            }
+        ),
+    )
 
     context = _build_context(tmp_path, run_id="20260315T010100Z_s07_stage2", submission_stage="stage2")
     result = module.stage_artifact(context)
@@ -227,3 +249,5 @@ def test_stage_artifact_generates_submission_and_validates_schema(tmp_path, monk
     frame = pd.read_csv(submission_path)
     assert list(frame.columns) == ["ID", "Pred"]
     assert frame["Pred"].between(0.0, 1.0).all()
+    assert frame["Pred"].nunique() == 2
+    assert submission["prediction_summary"]["exact_half_count"] == 0

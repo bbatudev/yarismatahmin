@@ -815,31 +815,139 @@ def build_matchup_matrix(tourney_df, team_features, gender="M", seed_round_slots
     return final
 
 
-# ─────────────────────────────────────────────────────────
-# ANA PIPELINE
-# ─────────────────────────────────────────────────────────
+def build_submission_matchup_matrix(
+    submission_df,
+    team_features,
+    gender="M",
+    default_round_num=1,
+):
+    """
+    Kaggle sample submission ID listesinden gerçek inference için matchup diff feature'ları üret.
+    TeamA = lower TeamID, TeamB = higher TeamID.
+    """
+    if "ID" not in submission_df.columns:
+        raise ValueError("submission dataframe missing ID column")
 
-def run_pipeline(gender="M"):
+    parsed = submission_df[["ID"]].copy()
+    id_parts = parsed["ID"].astype(str).str.split("_", expand=True)
+    if id_parts.shape[1] != 3:
+        raise ValueError("submission IDs must follow Season_TeamA_TeamB format")
+
+    parsed["Season"] = pd.to_numeric(id_parts[0], errors="coerce")
+    parsed["TeamA"] = pd.to_numeric(id_parts[1], errors="coerce")
+    parsed["TeamB"] = pd.to_numeric(id_parts[2], errors="coerce")
+
+    if parsed[["Season", "TeamA", "TeamB"]].isnull().any().any():
+        raise ValueError("submission IDs contain non-numeric season/team values")
+
+    parsed["Season"] = parsed["Season"].astype(int)
+    parsed["TeamA"] = parsed["TeamA"].astype(int)
+    parsed["TeamB"] = parsed["TeamB"].astype(int)
+
+    if not (parsed["TeamA"] < parsed["TeamB"]).all():
+        raise ValueError("submission TeamA must be the lower TeamID")
+
+    def attach(frame, team_col, prefix):
+        merged = frame.merge(
+            team_features,
+            left_on=["Season", team_col],
+            right_on=["Season", "TeamID"],
+            how="left",
+            suffixes=("", "_dup"),
+        )
+        dup_cols = [c for c in merged.columns if c.endswith("_dup")]
+        merged.drop(columns=dup_cols + ["TeamID"], inplace=True, errors="ignore")
+        feat_cols = [c for c in team_features.columns if c not in ["Season", "TeamID"]]
+        merged.rename(columns={c: f"{prefix}_{c}" for c in feat_cols}, inplace=True)
+        return merged
+
+    df = attach(parsed, "TeamA", "A")
+    df = attach(df, "TeamB", "B")
+
+    feat_cols = [c for c in team_features.columns if c not in ["Season", "TeamID"]]
+    for c in feat_cols:
+        ac = f"A_{c}"
+        bc = f"B_{c}"
+        if ac in df.columns and bc in df.columns:
+            df[f"{c}_diff"] = df[ac] - df[bc]
+
+    if {"A_eFG", "B_BlkPct", "B_eFG", "A_BlkPct"}.issubset(df.columns):
+        df["StyleClash_eFG_BlkPct_diff"] = (
+            df["A_eFG"] * (1.0 - df["B_BlkPct"].clip(lower=0.0, upper=1.0))
+            - df["B_eFG"] * (1.0 - df["A_BlkPct"].clip(lower=0.0, upper=1.0))
+        )
+
+    df["Heavy_Favorite"] = (df["SeedNum_diff"] <= -8).astype(int)
+    df["TeamA_Is_Favorite"] = (df["SeedNum_diff"] < 0).astype(int)
+    df["TeamA_Is_Underdog"] = (df["SeedNum_diff"] > 0).astype(int)
+    df["Toss_Up"] = (df["SeedNum_diff"].abs() <= 3).astype(int)
+
+    if {"A_SeedNum", "B_SeedNum"}.issubset(df.columns):
+        df["TeamA_SeedNum"] = df["A_SeedNum"]
+        df["TeamB_SeedNum"] = df["B_SeedNum"]
+        df["TeamA_Seed_Top4"] = df["TeamA_SeedNum"].between(1, 4).astype(int)
+        df["TeamA_Seed_Mid"] = df["TeamA_SeedNum"].between(5, 10).astype(int)
+        df["TeamA_Seed_Low"] = (df["TeamA_SeedNum"] >= 11).astype(int)
+        df["TeamA_Is_11_12_vs_5_6"] = (
+            df["TeamA_SeedNum"].isin([11, 12]) & df["TeamB_SeedNum"].isin([5, 6])
+        ).astype(int)
+        df["TeamA_Is_5_6_vs_11_12"] = (
+            df["TeamA_SeedNum"].isin([5, 6]) & df["TeamB_SeedNum"].isin([11, 12])
+        ).astype(int)
+
+    df["Round_Num"] = int(default_round_num)
+    df["Is_FirstWeekend"] = 1 if int(default_round_num) <= 2 else 0
+    df["Is_SecondWeekend"] = 1 if 3 <= int(default_round_num) <= 4 else 0
+    df["Is_FinalWeekend"] = 1 if int(default_round_num) >= 5 else 0
+    df["Split"] = "Submission"
+
+    diff_cols = [c for c in df.columns if c.endswith("_diff")]
+    if gender == "W" and "FTr_diff" in diff_cols and "FTr_vs_OppAllowed_diff" in diff_cols:
+        diff_cols.remove("FTr_diff")
+
+    extra_logic_cols = [
+        "Heavy_Favorite",
+        "Toss_Up",
+        "TeamA_Is_Favorite",
+        "TeamA_Is_Underdog",
+        "TeamA_Seed_Top4",
+        "TeamA_Seed_Mid",
+        "TeamA_Seed_Low",
+        "TeamA_Is_11_12_vs_5_6",
+        "TeamA_Is_5_6_vs_11_12",
+        "Round_Num",
+        "Is_FirstWeekend",
+        "Is_SecondWeekend",
+        "Is_FinalWeekend",
+    ]
+    keep = ["ID", "Season", "TeamA", "TeamB", "Split"] + diff_cols + extra_logic_cols
+    keep = [c for c in keep if c in df.columns]
+
+    output = df[keep].copy()
+    output.fillna(0, inplace=True)
+    return output
+
+
+def build_team_feature_snapshot(gender="M"):
     tag = "Men" if gender == "M" else "Women"
     print(f"\n{'='*55}")
     print(f"  {tag.upper()} PİPELINE BAŞLIYOR")
     print(f"{'='*55}")
 
-    # ── Dosya yükleme ──────────────────────────────────────
-    compact  = load(f"{gender}RegularSeasonCompactResults.csv")
+    compact = load(f"{gender}RegularSeasonCompactResults.csv")
     detailed = load(f"{gender}RegularSeasonDetailedResults.csv")
-    t_compact= load(f"{gender}NCAATourneyCompactResults.csv")
+    t_compact = load(f"{gender}NCAATourneyCompactResults.csv")
     conf_tourney_raw = load(f"{gender}ConferenceTourneyGames.csv")
     seed_round_slots_raw = load(f"{gender}NCAATourneySeedRoundSlots.csv")
-    seeds_raw= load(f"{gender}NCAATourneySeeds.csv")
+    seeds_raw = load(f"{gender}NCAATourneySeeds.csv")
     conf_raw = load(f"{gender}TeamConferences.csv")
     coaches_raw = load(f"{gender}TeamCoaches.csv")
     teams_raw = load(f"{gender}Teams.csv")
-    massey   = load("MMasseyOrdinals.csv") if gender == "M" else None
+    massey = load("MMasseyOrdinals.csv") if gender == "M" else None
 
     if compact is None or t_compact is None or seeds_raw is None:
         print(f"  [HATA] {tag} için zorunlu dosyalar eksik. Atlanıyor.")
-        return None
+        return None, None, None
 
     missing_box_cols = get_missing_columns(detailed, REQUIRED_BOXSCORE_COLUMNS)
     has_ff = detailed is not None and not missing_box_cols
@@ -851,7 +959,6 @@ def run_pipeline(gender="M"):
         print(f"  [UYARI] Detaylı box score dosyası eksik kolon içeriyor ({preview}{suffix}).")
         print(f"  [BİLGİ] Güvenli fallback: CompactResults kullanılacak, Four Factors atlanacak.")
 
-    # ── Regular season games_long ──────────────────────────
     print("\n[1] Match Long-Format üretiliyor (Home Court Adjustment yapılıyor)...")
     source = detailed if has_ff else compact
     gl = make_games_long(source, has_boxscore=has_ff)
@@ -867,37 +974,35 @@ def run_pipeline(gender="M"):
             gl = compute_four_factors(gl)
     print(f"    games_long: {len(gl):,} satır")
 
-    # ── Season agregasyonu ─────────────────────────────────
     print("[2] Season aggregates (TrueMargin, Paces, FourFactors) hesaplanıyor...")
     season_agg = build_season_aggregates(gl, has_ff=has_ff)
     print(f"    season_agg: {len(season_agg):,} takım-sezon")
 
-    # ── Rolling features ───────────────────────────────────
     print("[3] Momentum/Rolling Form özellikleri çıkartılıyor...")
     rolling = build_rolling_features(gl)
-    # DayNum < 134 filtresi Turnuvadan önceki son durumu yakalar (Time leakage koruması)
-    rolling_snap = (rolling[rolling["DayNum"] < 134]
-                    .sort_values("DayNum")
-                    .groupby(["Season","TeamID"])
-                    .last()
-                    .reset_index()
-                    .drop(columns=["DayNum"]))
+    rolling_snap = (
+        rolling[rolling["DayNum"] < 134]
+        .sort_values("DayNum")
+        .groupby(["Season", "TeamID"])
+        .last()
+        .reset_index()
+        .drop(columns=["DayNum"])
+    )
 
-    # ── Rest days & Fatigue ─────────────────────────────────
     print("[4] Rest days & yorgunluk baglami (DaysSinceLastGame, GamesLast7/14Days, B2B_Last14Days) ekleniyor...")
     rest = build_rest_days(gl)
-    rest_snap = (rest[rest["DayNum"] < 134]
-                 .sort_values("DayNum")
-                 .groupby(["Season","TeamID"])
-                 .last()
-                 .reset_index()
-                 .drop(columns=["DayNum"]))
+    rest_snap = (
+        rest[rest["DayNum"] < 134]
+        .sort_values("DayNum")
+        .groupby(["Season", "TeamID"])
+        .last()
+        .reset_index()
+        .drop(columns=["DayNum"])
+    )
 
-    # ── Seed features ──────────────────────────────────────
     print("[5] Seed verisi dönüştürülüyor...")
     seed_feats = build_seed_features(seeds_raw)
-    
-    # ── Conference features ────────────────────────────────
+
     conf_feats = None
     conf_tourney_feats = None
     if conf_raw is not None:
@@ -908,8 +1013,7 @@ def run_pipeline(gender="M"):
         print("[6.1] Konferans turnuvası context feature'ları hazırlanıyor...")
     else:
         print("[6.1] [UYARI] ConferenceTourney dosyası bulunamadı, conference-tourney feature'ları atlanıyor.")
-    
-    # ── Coach & Program features ───────────────────────────
+
     coach_feats = None
     program_feats = None
     if coaches_raw is not None:
@@ -921,13 +1025,11 @@ def run_pipeline(gender="M"):
     else:
         print("[8] [UYARI] Teams dosyası bulunamadı, program-age atlanıyor.")
 
-    # ── Massey features (Sadece Men) ───────────────────────
     massey_feats = None
     if gender == "M" and massey is not None:
         print("[9] Massey Elite Consensus hesaplanıyor (Sadece Men)...")
         massey_feats = build_massey_features(massey)
 
-    # ── Team features birleştir ───────────────────────────
     print("\n[10] Tüm Takım verileri tekilleştiriliyor...")
     min_season = MIN_SEASON_MEN if gender == "M" else MIN_SEASON_WOMEN
     team_feats = season_agg[season_agg["Season"] >= min_season].copy()
@@ -940,37 +1042,32 @@ def run_pipeline(gender="M"):
         coach_feats = build_coach_features(coaches_raw)
     if teams_raw is not None:
         program_feats = build_program_features(team_feats, teams_raw)
-    
-    team_feats = team_feats.merge(rolling_snap, on=["Season","TeamID"], how="left")
-    team_feats = team_feats.merge(rest_snap,    on=["Season","TeamID"], how="left")
-    team_feats = team_feats.merge(seed_feats,   on=["Season","TeamID"], how="left")
+
+    team_feats = team_feats.merge(rolling_snap, on=["Season", "TeamID"], how="left")
+    team_feats = team_feats.merge(rest_snap, on=["Season", "TeamID"], how="left")
+    team_feats = team_feats.merge(seed_feats, on=["Season", "TeamID"], how="left")
     if conf_feats is not None and len(conf_feats):
-        team_feats = team_feats.merge(conf_feats, on=["Season","TeamID"], how="left")
+        team_feats = team_feats.merge(conf_feats, on=["Season", "TeamID"], how="left")
     if conf_tourney_feats is not None and len(conf_tourney_feats):
-        team_feats = team_feats.merge(conf_tourney_feats, on=["Season","TeamID"], how="left")
+        team_feats = team_feats.merge(conf_tourney_feats, on=["Season", "TeamID"], how="left")
     if coach_feats is not None and len(coach_feats):
-        team_feats = team_feats.merge(coach_feats, on=["Season","TeamID"], how="left")
+        team_feats = team_feats.merge(coach_feats, on=["Season", "TeamID"], how="left")
     if program_feats is not None and len(program_feats):
-        team_feats = team_feats.merge(program_feats, on=["Season","TeamID"], how="left")
-    
+        team_feats = team_feats.merge(program_feats, on=["Season", "TeamID"], how="left")
     if massey_feats is not None:
-        team_feats = team_feats.merge(massey_feats, on=["Season","TeamID"], how="left")
+        team_feats = team_feats.merge(massey_feats, on=["Season", "TeamID"], how="left")
 
     seed_mispricing_feats = build_seed_mispricing_features(team_feats, gender=gender)
     if len(seed_mispricing_feats):
         team_feats = team_feats.merge(seed_mispricing_feats, on=["Season", "TeamID"], how="left")
-        
-    # Kadınlar turnuvasında Box Scorelar 2010'da yayınlanmaya başladı.
-    # Four Factors içeren algoritmaların çökmemesi için 2010 öncesi düşürülmelidir.
+
     if gender == "W" and has_ff:
         prev_len = len(team_feats)
         team_feats = team_feats[team_feats["Season"] >= 2010].copy()
         print(f"    [BİLGİ] Women Data -> 2010 öncesi (FourFactors yoksunluğu sebebiyle) {prev_len - len(team_feats)} satır drop edildi.")
-        
-    # Gereksiz ve gürültü çıkaran "Games" (Toplam oynanan maç) özelliğini çıkartıyoruz
-    team_feats.drop(columns=["Games"], inplace=True, errors="ignore")    
 
-    # Nötr fallback'ler: conference-tourney verisi olmayan takımlar/model satırları için.
+    team_feats.drop(columns=["Games"], inplace=True, errors="ignore")
+
     if "ConfTourneyGamesPlayed" in team_feats.columns:
         team_feats["ConfTourneyGamesPlayed"] = team_feats["ConfTourneyGamesPlayed"].fillna(0)
     if "ConfTourneyWinPct" in team_feats.columns:
@@ -982,16 +1079,28 @@ def run_pipeline(gender="M"):
         if pd.isna(median_days):
             median_days = 7
         team_feats["DaysSinceConfFinal"] = team_feats["DaysSinceConfFinal"].fillna(median_days)
-        
-    # Eksik verileri doldur
+
     team_feats.fillna(0, inplace=True)
     print(f"    Team Özellikleri Matrisi: {len(team_feats):,} satır, {len(team_feats.columns)} özellik sütunu hazır.")
+
+    return team_feats, seed_round_slots_raw, t_compact
+
+
+# ─────────────────────────────────────────────────────────
+# ANA PIPELINE
+# ─────────────────────────────────────────────────────────
+
+def run_pipeline(gender="M"):
+    team_feats, seed_round_slots_raw, t_compact = build_team_feature_snapshot(gender=gender)
+    if team_feats is None or t_compact is None:
+        return None
 
     # ── Matchup matrix üret ───────────────────────────────
     print("[11] Matchup (Turnuva) Diferansiyel Matrisi birleştiriliyor...")
     
     # Turnuva verisini de aynı min_season'dan filtrele
     # Aksi halde 1985-2002 maçları join'da null üretir
+    min_season = MIN_SEASON_MEN if gender == "M" else MIN_SEASON_WOMEN
     t_compact_filtered = t_compact[t_compact["Season"] >= min_season].copy()
     print(f"    Turnuva filtresi: {min_season}+ -> {len(t_compact_filtered)} maç ({len(t_compact)} -> {len(t_compact_filtered)})")
     

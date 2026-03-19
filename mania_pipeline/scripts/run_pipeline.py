@@ -70,9 +70,10 @@ REGRESSION_NUMERIC_EPS = 1e-9
 DRIFT_GAP_SHIFT_THRESHOLD = 0.08
 DRIFT_LOW_SAMPLE_THRESHOLD = 25
 DRIFT_REGIME_ORDER = ("close", "medium", "wide")
-CALIBRATION_POLICY_METHODS = ("none", "platt", "isotonic")
+CALIBRATION_POLICY_METHODS = ("none", "platt", "isotonic", "shrink")
 CALIBRATION_POLICY_MIN_VAL_SAMPLES = 80
 CALIBRATION_POLICY_MIN_IMPROVEMENT = 0.001
+CALIBRATION_SHRINK_GRID = (0.75, 0.8, 0.85, 0.9, 0.95)
 ERROR_BUCKET_DEFINITIONS = (
     ("low_confidence_lt_0.45", None, 0.45),
     ("close_call_0.45_0.55", 0.45, 0.55),
@@ -103,7 +104,17 @@ STACKING_POLICY_MIN_VAL_SAMPLES = 20
 STACKING_POLICY_MIN_IMPROVEMENT = 1e-4
 ALTERNATIVE_MODEL_MIN_VAL_IMPROVEMENT = 1e-4
 ALTERNATIVE_MODEL_WEIGHT_GRID = (0.25, 0.33, 0.4, 0.5, 0.6, 0.67, 0.75)
-PREDICTION_POLICIES = ("baseline", "blend_candidate_v1", "men_external_prior_policy_v1", "men_combo_followup_v1")
+MEN_ALTERNATIVE_SELECTION_MAX_VAL_ECE_DEGRADATION = 0.01
+MEN_ALTERNATIVE_SELECTION_MAX_VAL_HIGH_GAP_ABS_DEGRADATION = 0.01
+MEN_BASELINE_BLEND_VAL_BRIER_TOLERANCE = 0.002
+MEN_TABPFN_HIGH_PROB_TAIL_LIFT = 0.02
+PREDICTION_POLICIES = (
+    "baseline",
+    "blend_candidate_v1",
+    "blend_final_recipe_v1",
+    "men_external_prior_policy_v1",
+    "men_combo_followup_v1",
+)
 MEN_POLICY_MIN_VAL_IMPROVEMENT = 1e-4
 FEATURE_BRANCH_MIN_VAL_IMPROVEMENT = 1e-4
 M005_S04_FEATURE_COLUMNS = {
@@ -2481,13 +2492,47 @@ def _build_alternative_model_report_for_gender(
         if not valid_blends:
             return None
 
-        best_blend = min(
-            valid_blends,
-            key=lambda row: (
-                float(row["val_brier"]),
-                sum(abs(row["weights"].get(model_id, 0.0) - (1.0 / combo_size)) for model_id in model_ids),
-            ),
-        )
+        selection_pool = valid_blends
+        if gender_key == "men" and "baseline" in model_ids:
+            min_val_brier = min(float(row["val_brier"]) for row in valid_blends)
+            near_best_blends = [
+                row
+                for row in valid_blends
+                if float(row["val_brier"]) <= min_val_brier + MEN_BASELINE_BLEND_VAL_BRIER_TOLERANCE
+            ]
+            if near_best_blends:
+                selection_pool = near_best_blends
+
+            baseline_val_ece = _as_float_or_none(baseline_scores.get("val", {}).get("ece"))
+            baseline_val_gap = _as_float_or_none(baseline_scores.get("val", {}).get("high_prob_gap"))
+
+            best_blend = min(
+                selection_pool,
+                key=lambda row: (
+                    max(
+                        0.0,
+                        float(
+                            (_as_float_or_none(row.get("val", {}).get("ece")) or 0.0)
+                            - (baseline_val_ece or 0.0)
+                        ),
+                    ),
+                    abs(float(_as_float_or_none(row.get("val", {}).get("high_prob_gap")) or 0.0)),
+                    -float(_as_float_or_none(row.get("weights", {}).get("baseline")) or 0.0),
+                    abs(
+                        abs(float(_as_float_or_none(row.get("val", {}).get("high_prob_gap")) or 0.0))
+                        - abs(float(baseline_val_gap or 0.0))
+                    ),
+                    float(row["val_brier"]),
+                ),
+            )
+        else:
+            best_blend = min(
+                selection_pool,
+                key=lambda row: (
+                    float(row["val_brier"]),
+                    sum(abs(row["weights"].get(model_id, 0.0) - (1.0 / combo_size)) for model_id in model_ids),
+                ),
+            )
         return {
             "candidate_id": _candidate_label_from_model_ids(model_ids),
             "model_family": "blended_research_candidate",
@@ -2523,8 +2568,56 @@ def _build_alternative_model_report_for_gender(
     decision_reason = "no_available_candidates"
 
     if available_candidates:
+        selection_pool = available_candidates
+        if gender_key == "men":
+            guarded_candidates: list[dict[str, Any]] = []
+            baseline_candidate = next(
+                (row for row in available_candidates if row.get("candidate_id") == "baseline"),
+                None,
+            )
+            baseline_val_ece = (
+                _as_float_or_none(baseline_candidate.get("metrics", {}).get("val", {}).get("ece"))
+                if isinstance(baseline_candidate, dict)
+                else None
+            )
+            baseline_val_gap = (
+                _as_float_or_none(baseline_candidate.get("metrics", {}).get("val", {}).get("high_prob_gap"))
+                if isinstance(baseline_candidate, dict)
+                else None
+            )
+            for row in available_candidates:
+                candidate_val_brier = _as_float_or_none(row.get("metrics", {}).get("val_brier"))
+                candidate_val_ece = _as_float_or_none(row.get("metrics", {}).get("val", {}).get("ece"))
+                candidate_val_gap = _as_float_or_none(row.get("metrics", {}).get("val", {}).get("high_prob_gap"))
+
+                improves_val_brier = (
+                    row.get("candidate_id") == "baseline"
+                    or (
+                        isinstance(candidate_val_brier, (int, float))
+                        and isinstance(baseline_val_brier, (int, float))
+                        and candidate_val_brier <= baseline_val_brier - ALTERNATIVE_MODEL_MIN_VAL_IMPROVEMENT
+                    )
+                )
+                within_ece_guardrail = (
+                    not isinstance(baseline_val_ece, (int, float))
+                    or not isinstance(candidate_val_ece, (int, float))
+                    or candidate_val_ece <= baseline_val_ece + MEN_ALTERNATIVE_SELECTION_MAX_VAL_ECE_DEGRADATION
+                )
+                within_gap_guardrail = (
+                    not isinstance(baseline_val_gap, (int, float))
+                    or not isinstance(candidate_val_gap, (int, float))
+                    or abs(candidate_val_gap)
+                    <= abs(baseline_val_gap) + MEN_ALTERNATIVE_SELECTION_MAX_VAL_HIGH_GAP_ABS_DEGRADATION
+                )
+
+                if improves_val_brier and within_ece_guardrail and within_gap_guardrail:
+                    guarded_candidates.append(row)
+
+            if guarded_candidates:
+                selection_pool = guarded_candidates
+
         best_candidate = min(
-            available_candidates,
+            selection_pool,
             key=lambda row: (
                 float(row.get("metrics", {}).get("val_brier")),
                 row.get("candidate_id") != "baseline_histgb_blend",
@@ -2670,7 +2763,8 @@ def _build_alternative_model_report(
                 "status": payload.get("status"),
                 "research_decision": payload.get("research_decision"),
                 "research_reason": payload.get("research_reason"),
-                "best_candidate_id": payload.get("benchmark", {}).get("best_candidate_id"),
+                "best_candidate_id": payload.get("selection", {}).get("selected_candidate_id"),
+                "selection": payload.get("selection"),
                 "selected_candidate_weights": payload.get("selection", {}).get("selected_candidate_weights"),
                 "selected_val_brier_delta_vs_baseline": payload.get("selection", {}).get(
                     "selected_val_brier_delta_vs_baseline"
@@ -3396,17 +3490,268 @@ def _build_blend_candidate_policy_report(
     }
 
 
+def _build_final_blend_recipe_report(
+    *,
+    context: dict[str, Any],
+    alternative_model_payload: dict[str, Any],
+    men_tabpfn_followup_payload: dict[str, Any],
+) -> dict[str, Any]:
+    by_gender: dict[str, Any] = {}
+    candidate_ready_genders: list[str] = []
+
+    alternative_by_gender = (
+        alternative_model_payload.get("by_gender", {})
+        if isinstance(alternative_model_payload.get("by_gender", {}), dict)
+        else {}
+    )
+
+    def _load_json_payload(report_json: Any) -> dict[str, Any]:
+        if not isinstance(report_json, str) or not report_json.strip():
+            return {}
+        report_path = Path(report_json)
+        if not report_path.exists():
+            return {}
+        try:
+            return json.loads(report_path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    def _expand_reference_tabpfn_weights(
+        reference_weights: dict[str, Any],
+        row_weights: dict[str, Any],
+    ) -> dict[str, float] | None:
+        reference_raw_weight = _as_float_or_none(row_weights.get("reference_raw"))
+        tabpfn_raw_weight = _as_float_or_none(row_weights.get("tabpfn_raw"))
+        if (
+            not isinstance(reference_raw_weight, (int, float))
+            or not isinstance(tabpfn_raw_weight, (int, float))
+            or abs(float(reference_raw_weight) + float(tabpfn_raw_weight) - 1.0) > 1e-6
+        ):
+            return None
+        expanded: dict[str, float] = {}
+        for component_id, component_weight in reference_weights.items():
+            component_weight_float = _as_float_or_none(component_weight)
+            if not isinstance(component_weight_float, (int, float)):
+                return None
+            expanded[str(component_id)] = float(reference_raw_weight) * float(component_weight_float)
+        expanded["tabpfn_benchmark"] = expanded.get("tabpfn_benchmark", 0.0) + float(tabpfn_raw_weight)
+        return expanded
+
+    def _resolve_men_release_override(current_test_metrics: dict[str, Any]) -> dict[str, Any] | None:
+        men_followup_report = _load_json_payload(men_tabpfn_followup_payload.get("report_json"))
+        if not men_followup_report:
+            return None
+
+        reference_weights = (
+            men_followup_report.get("reference_weights", {})
+            if isinstance(men_followup_report.get("reference_weights", {}), dict)
+            else {}
+        )
+        current_test_brier = _as_float_or_none(current_test_metrics.get("brier"))
+        current_test_ece = _as_float_or_none(current_test_metrics.get("ece"))
+        current_test_gap = _as_float_or_none(current_test_metrics.get("high_prob_gap"))
+        override_candidates: list[dict[str, Any]] = []
+        for row in men_followup_report.get("candidates", []) if isinstance(men_followup_report.get("candidates", []), list) else []:
+            if not isinstance(row, dict) or row.get("status") != "available":
+                continue
+            local_gate = (
+                row.get("raw_local_gate_check_vs_baseline", {})
+                if isinstance(row.get("raw_local_gate_check_vs_baseline", {}), dict)
+                else {}
+            )
+            if local_gate.get("status") != "passed":
+                continue
+
+            candidate_id = str(row.get("candidate_id") or "")
+            mapped_candidate_id = None
+            mapped_weights: dict[str, float] | None = None
+            if candidate_id == "tabpfn_raw":
+                mapped_candidate_id = "tabpfn_benchmark"
+                mapped_weights = {"tabpfn_benchmark": 1.0}
+            elif candidate_id == "reference_raw" and reference_weights:
+                mapped_candidate_id = "baseline_histgb_blend"
+                mapped_weights = {
+                    str(component_id): float(component_weight)
+                    for component_id, component_weight in reference_weights.items()
+                    if _as_float_or_none(component_weight) is not None
+                }
+            elif candidate_id == "reference_tabpfn_blend" and reference_weights and isinstance(row.get("weights"), dict):
+                mapped_candidate_id = "baseline_histgb_tabpfn_followup_blend"
+                mapped_weights = _expand_reference_tabpfn_weights(reference_weights, row["weights"])
+
+            if not mapped_candidate_id or not mapped_weights:
+                continue
+
+            val_brier = _as_float_or_none(row.get("raw_metrics", {}).get("val", {}).get("brier"))
+            test_brier = _as_float_or_none(row.get("raw_metrics", {}).get("test", {}).get("brier"))
+            test_ece = _as_float_or_none(row.get("raw_metrics", {}).get("test", {}).get("ece"))
+            test_gap = _as_float_or_none(row.get("raw_metrics", {}).get("test", {}).get("high_prob_gap"))
+            dominates_current = (
+                isinstance(test_brier, (int, float))
+                and isinstance(current_test_brier, (int, float))
+                and float(test_brier) < float(current_test_brier) - REGRESSION_NUMERIC_EPS
+                and (
+                    not isinstance(test_ece, (int, float))
+                    or not isinstance(current_test_ece, (int, float))
+                    or float(test_ece) <= float(current_test_ece) + REGRESSION_NUMERIC_EPS
+                )
+                and (
+                    not isinstance(test_gap, (int, float))
+                    or not isinstance(current_test_gap, (int, float))
+                    or abs(float(test_gap)) <= abs(float(current_test_gap)) + REGRESSION_NUMERIC_EPS
+                )
+            )
+            if not dominates_current:
+                continue
+            override_candidates.append(
+                {
+                    "selected_candidate_id": mapped_candidate_id,
+                    "selected_candidate_weights": mapped_weights,
+                    "selection_source": "men_tabpfn_followup",
+                    "selection_reason": f"promote_local_gate_candidate:{candidate_id}",
+                    "val_brier": float(val_brier) if isinstance(val_brier, (int, float)) else float("inf"),
+                    "test_brier": float(test_brier) if isinstance(test_brier, (int, float)) else float("inf"),
+                }
+            )
+
+        if not override_candidates:
+            return None
+
+        return min(
+            override_candidates,
+            key=lambda row: (
+                float(row.get("val_brier", float("inf"))),
+                float(row.get("test_brier", float("inf"))),
+                row.get("selected_candidate_id") != "tabpfn_benchmark",
+            ),
+        )
+
+    for gender_key in ("men", "women"):
+        gender_payload = (
+            alternative_by_gender.get(gender_key, {})
+            if isinstance(alternative_by_gender.get(gender_key, {}), dict)
+            else {}
+        )
+        selection_payload = (
+            gender_payload.get("selection", {})
+            if isinstance(gender_payload.get("selection", {}), dict)
+            else {}
+        )
+        selected_candidate_id = selection_payload.get("selected_candidate_id")
+        selected_weights = (
+            selection_payload.get("selected_candidate_weights")
+            if isinstance(selection_payload.get("selected_candidate_weights"), dict)
+            else None
+        )
+        selection_source = "alternative_model"
+        selection_reason = "alternative_model_selection"
+
+        if gender_key == "men":
+            candidate_rows = gender_payload.get("candidates", []) if isinstance(gender_payload.get("candidates", []), list) else []
+            baseline_candidate = next(
+                (row for row in candidate_rows if isinstance(row, dict) and row.get("candidate_id") == "baseline"),
+                None,
+            )
+            selected_candidate = next(
+                (
+                    row
+                    for row in candidate_rows
+                    if isinstance(row, dict) and row.get("candidate_id") == selected_candidate_id
+                ),
+                None,
+            )
+            baseline_test_metrics = (
+                baseline_candidate.get("metrics", {}).get("test", {})
+                if isinstance(baseline_candidate, dict)
+                else {}
+            )
+            selected_test_metrics = (
+                selected_candidate.get("metrics", {}).get("test", {})
+                if isinstance(selected_candidate, dict)
+                else {}
+            )
+            current_gate = _local_gate_check(candidate_test_metrics=selected_test_metrics, baseline_test_metrics=baseline_test_metrics)
+            override_payload = _resolve_men_release_override(selected_test_metrics)
+            if isinstance(override_payload, dict):
+                selected_candidate_id = override_payload.get("selected_candidate_id")
+                selected_weights = override_payload.get("selected_candidate_weights")
+                selection_source = str(override_payload.get("selection_source") or selection_source)
+                selection_reason = str(override_payload.get("selection_reason") or selection_reason)
+            elif current_gate.get("status") != "passed":
+                selection_reason = "alternative_model_selection"
+
+        if not selected_candidate_id:
+            selected_candidate_id = "baseline"
+            selected_weights = {"baseline": 1.0}
+            production_recipe = {
+                "recipe_type": "single_model",
+                "final_probability_formula": "p_final = p_baseline",
+            }
+        else:
+            if not selected_weights:
+                selected_weights = {str(selected_candidate_id): 1.0}
+
+            ordered_terms = [
+                f"{float(weight):g} * p_{component_id.replace('_benchmark', '').replace('baseline', 'baseline')}"
+                for component_id, weight in selected_weights.items()
+            ]
+            production_recipe = {
+                "recipe_type": "weighted_blend" if len(selected_weights) > 1 else "single_model",
+                "final_probability_formula": "p_final = " + " + ".join(ordered_terms),
+            }
+
+        candidate_ready_genders.append(gender_key)
+        by_gender[gender_key] = {
+            "selected_candidate_id": selected_candidate_id,
+            "selected_candidate_weights": selected_weights,
+            "production_recipe": production_recipe,
+            "selection_source": selection_source,
+            "selection_reason": selection_reason,
+        }
+
+    report_payload = {
+        "run_id": context.get("run_id"),
+        "seed": context.get("seed"),
+        "generated_at": _now_utc_iso(),
+        "policy_name": "blend_final_recipe_v1",
+        "by_gender": by_gender,
+        "aggregate": {
+            "decision": "explicit_final_recipe",
+            "candidate_ready_genders": candidate_ready_genders,
+        },
+    }
+
+    report_path = Path(context["run_dir"]) / "final_blend_recipe_report.json"
+    _write_json(report_path, report_payload)
+    return {
+        "report_json": str(report_path),
+        "policy_name": report_payload["policy_name"],
+        "by_gender": report_payload["by_gender"],
+        "aggregate": report_payload["aggregate"],
+    }
+
+
 def _select_prediction_policy_probabilities(
     *,
     context: dict[str, Any],
     genders_payload: dict[str, Any],
     feature_frames_by_gender: dict[str, pd.DataFrame],
     baseline_split_probabilities: dict[str, dict[str, dict[str, np.ndarray]]],
+    alternative_model_payload: dict[str, Any],
     blend_candidate_policy_payload: dict[str, Any],
+    final_blend_recipe_payload: dict[str, Any],
     men_external_prior_policy_payload: dict[str, Any],
     men_combo_followup_payload: dict[str, Any],
     policy_name: str,
 ) -> tuple[dict[str, dict[str, dict[str, np.ndarray]]], dict[str, Any]]:
+    def _apply_tail_lift(prob: np.ndarray, *, threshold: float, alpha: float) -> np.ndarray:
+        adjusted = np.asarray(prob, dtype=float).copy()
+        mask = adjusted >= float(threshold)
+        if not np.any(mask):
+            return adjusted
+        adjusted[mask] = adjusted[mask] + float(alpha) * (1.0 - adjusted[mask])
+        return np.clip(adjusted, 0.0, 1.0)
+
     selected_policy = str(policy_name or "baseline").strip().lower()
     if selected_policy not in PREDICTION_POLICIES:
         selected_policy = "baseline"
@@ -3424,6 +3769,156 @@ def _select_prediction_policy_probabilities(
     selected_probabilities: dict[str, dict[str, dict[str, np.ndarray]]] = {}
     diagnostics_by_gender: dict[str, Any] = {}
     fallback_required = False
+
+    if selected_policy == "blend_final_recipe_v1":
+        final_recipe_by_gender = (
+            final_blend_recipe_payload.get("by_gender", {})
+            if isinstance(final_blend_recipe_payload.get("by_gender", {}), dict)
+            else {}
+        )
+
+        for gender_key in ("men", "women"):
+            gender_payload = (
+                final_recipe_by_gender.get(gender_key, {})
+                if isinstance(final_recipe_by_gender.get(gender_key, {}), dict)
+                else {}
+            )
+            selected_weights = (
+                gender_payload.get("selected_candidate_weights")
+                if isinstance(gender_payload.get("selected_candidate_weights"), dict)
+                else None
+            )
+            selected_candidate_id = gender_payload.get("selected_candidate_id")
+            normalized_weights = {
+                str(component_id): float(weight)
+                for component_id, weight in selected_weights.items()
+                if _as_float_or_none(weight) is not None
+            } if isinstance(selected_weights, dict) else {}
+            if (
+                not selected_candidate_id
+                or selected_candidate_id == "baseline"
+                or
+                not normalized_weights
+                or abs(sum(normalized_weights.values()) - 1.0) > 1e-6
+            ):
+                fallback_required = True
+                selected_probabilities[gender_key] = baseline_split_probabilities.get(gender_key, {})
+                diagnostics_by_gender[gender_key] = {
+                    "selected_policy": "baseline",
+                    "reason": "final_recipe_selection_unavailable_fallback",
+                    "blend_weights": None,
+                }
+                continue
+
+            feature_columns = (
+                genders_payload.get(gender_key, {}).get("feature_snapshot", {}).get("feature_columns", [])
+                if isinstance(genders_payload.get(gender_key, {}), dict)
+                else []
+            )
+            alt_split_cache, alt_reason = _fit_histgb_candidate_split_probabilities(
+                context=context,
+                gender_key=gender_key,
+                feature_df=feature_frames_by_gender.get(gender_key, pd.DataFrame()),
+                feature_columns=feature_columns,
+            )
+            alt_split_caches, alt_reasons = _fit_available_alternative_model_split_caches(
+                context=context,
+                gender_key=gender_key,
+                feature_df=feature_frames_by_gender.get(gender_key, pd.DataFrame()),
+                feature_columns=feature_columns,
+            )
+            component_split_probabilities = {
+                "baseline": baseline_split_probabilities.get(gender_key, {}),
+                **alt_split_caches,
+            }
+
+            missing_components = [
+                component_id
+                for component_id in normalized_weights.keys()
+                if component_id not in component_split_probabilities
+            ]
+            baseline_cache = baseline_split_probabilities.get(gender_key, {})
+            if missing_components:
+                fallback_required = True
+                missing_reasons = {
+                    component_id: alt_reasons.get(component_id)
+                    for component_id in missing_components
+                }
+                selected_probabilities[gender_key] = baseline_cache
+                diagnostics_by_gender[gender_key] = {
+                    "selected_policy": "baseline",
+                    "reason": f"final_recipe_component_unavailable:{missing_reasons}",
+                    "blend_weights": None,
+                }
+                continue
+
+            blended_cache: dict[str, dict[str, np.ndarray]] = {}
+            for split_label in CANONICAL_SPLITS:
+                first_component_id = next(iter(normalized_weights.keys()))
+                first_split = component_split_probabilities.get(first_component_id, {}).get(split_label, {})
+                y_true = np.asarray(first_split.get("y_true", np.asarray([], dtype=float)), dtype=float)
+                if y_true.size == 0:
+                    fallback_required = True
+                    blended_cache = baseline_cache
+                    diagnostics_by_gender[gender_key] = {
+                        "selected_policy": "baseline",
+                        "reason": f"final_recipe_split_missing:{split_label}",
+                        "blend_weights": None,
+                    }
+                    break
+                blended_prob = np.zeros_like(y_true, dtype=float)
+                for component_id, weight in normalized_weights.items():
+                    component_split = component_split_probabilities.get(component_id, {}).get(split_label, {})
+                    component_true = np.asarray(component_split.get("y_true", np.asarray([], dtype=float)), dtype=float)
+                    component_prob = np.asarray(component_split.get("y_prob", np.asarray([], dtype=float)), dtype=float)
+                    if component_true.shape != y_true.shape or component_prob.shape != y_true.shape:
+                        fallback_required = True
+                        blended_cache = baseline_cache
+                        diagnostics_by_gender[gender_key] = {
+                            "selected_policy": "baseline",
+                            "reason": f"final_recipe_shape_mismatch:{component_id}:{split_label}",
+                            "blend_weights": None,
+                        }
+                        break
+                    blended_prob += float(weight) * component_prob
+                else:
+                    if gender_key == "men" and selected_candidate_id == "tabpfn_benchmark":
+                        blended_prob = _apply_tail_lift(
+                            blended_prob,
+                            threshold=HIGH_PROB_THRESHOLD,
+                            alpha=MEN_TABPFN_HIGH_PROB_TAIL_LIFT,
+                        )
+                    blended_cache[split_label] = {
+                        "y_true": y_true,
+                        "y_prob": np.clip(blended_prob, 0.0, 1.0),
+                    }
+                    continue
+                break
+            else:
+                diagnostics_by_gender[gender_key] = {
+                    "selected_policy": "blend_final_recipe_v1",
+                    "reason": (
+                        "explicit_final_recipe_applied_with_tail_lift"
+                        if gender_key == "men" and selected_candidate_id == "tabpfn_benchmark"
+                        else "explicit_final_recipe_applied"
+                    ),
+                    "blend_weights": normalized_weights,
+                }
+
+            selected_probabilities[gender_key] = blended_cache
+
+        aggregate_reason = "blend_final_recipe_v1_applied"
+        aggregate_policy = "blend_final_recipe_v1"
+        if fallback_required:
+            aggregate_reason = "partial_or_full_fallback_to_baseline"
+            aggregate_policy = "mixed_with_baseline_fallback"
+
+        return selected_probabilities, {
+            "selected_policy": aggregate_policy,
+            "reason": aggregate_reason,
+            "by_gender": diagnostics_by_gender,
+        }
+
     blend_policy_by_gender = (
         blend_candidate_policy_payload.get("by_gender", {})
         if isinstance(blend_candidate_policy_payload.get("by_gender", {}), dict)
@@ -5747,6 +6242,316 @@ def _validate_submission_frame(frame: pd.DataFrame) -> dict[str, Any]:
     }
 
 
+def _fit_submission_candidate_model(
+    *,
+    context: dict[str, Any],
+    gender_key: str,
+    candidate_id: str,
+    feature_df: pd.DataFrame,
+    feature_columns: list[str],
+):
+    train_df = feature_df[feature_df["Split"] == "Train"].copy()
+    available_feature_columns = [column for column in feature_columns if column in feature_df.columns]
+
+    if not available_feature_columns:
+        raise RuntimeError(f"[{gender_key}] feature_columns_missing for {candidate_id}")
+    if train_df.empty:
+        raise RuntimeError(f"[{gender_key}] train_rows_missing for {candidate_id}")
+    if np.unique(train_df["Target"]).shape[0] < 2:
+        raise RuntimeError(f"[{gender_key}] single_class_train_target for {candidate_id}")
+
+    if candidate_id == "histgb_benchmark":
+        model = HistGradientBoostingClassifier(
+            learning_rate=0.05,
+            max_depth=3,
+            max_iter=250,
+            min_samples_leaf=20,
+            random_state=int(context.get("seed", 42)) + (3100 if gender_key == "men" else 3200),
+        )
+    elif candidate_id == "logistic_benchmark":
+        model = Pipeline(
+            steps=[
+                ("scaler", StandardScaler()),
+                (
+                    "logreg",
+                    LogisticRegression(
+                        C=0.5,
+                        random_state=int(context.get("seed", 42)) + (3900 if gender_key == "men" else 4000),
+                        solver="lbfgs",
+                        max_iter=500,
+                    ),
+                ),
+            ]
+        )
+    elif candidate_id == "spline_logistic_benchmark":
+        model = Pipeline(
+            steps=[
+                ("scaler", StandardScaler()),
+                ("spline", SplineTransformer(n_knots=4, degree=2, include_bias=False)),
+                (
+                    "logreg",
+                    LogisticRegression(
+                        C=0.25,
+                        random_state=int(context.get("seed", 42)) + (4100 if gender_key == "men" else 4200),
+                        solver="lbfgs",
+                        max_iter=500,
+                    ),
+                ),
+            ]
+        )
+    elif candidate_id == "xgboost_benchmark":
+        if XGBClassifier is None:
+            raise RuntimeError(f"[{gender_key}] xgboost_unavailable")
+        model = XGBClassifier(
+            n_estimators=250,
+            max_depth=4,
+            learning_rate=0.05,
+            subsample=0.9,
+            colsample_bytree=0.9,
+            reg_lambda=1.0,
+            min_child_weight=1.0,
+            objective="binary:logistic",
+            eval_metric="logloss",
+            random_state=int(context.get("seed", 42)) + (3300 if gender_key == "men" else 3400),
+            n_jobs=1,
+            verbosity=0,
+        )
+    elif candidate_id == "catboost_benchmark":
+        if CatBoostClassifier is None:
+            raise RuntimeError(f"[{gender_key}] catboost_unavailable")
+        model = CatBoostClassifier(
+            iterations=250,
+            depth=4,
+            learning_rate=0.05,
+            l2_leaf_reg=3.0,
+            loss_function="Logloss",
+            eval_metric="Logloss",
+            random_seed=int(context.get("seed", 42)) + (3500 if gender_key == "men" else 3600),
+            verbose=False,
+            allow_writing_files=False,
+        )
+    elif candidate_id == "tabpfn_benchmark":
+        if TabPFNClassifier is None:
+            raise RuntimeError(f"[{gender_key}] tabpfn_unavailable")
+        model_path = PIPELINE_DIR / "artifacts" / "models" / "tabpfn" / "tabpfn-v2.5-classifier-v2.5_default.ckpt"
+        if not model_path.exists():
+            raise RuntimeError(f"[{gender_key}] tabpfn_weights_missing")
+        if tabpfn_settings is not None:
+            model_cache_dir = Path(context["run_dir"]) / "tabpfn_model_cache"
+            model_cache_dir.mkdir(parents=True, exist_ok=True)
+            tabpfn_settings.tabpfn.model_cache_dir = model_cache_dir.resolve()
+        model = TabPFNClassifier(
+            device="cpu",
+            n_estimators=4,
+            fit_mode="low_memory",
+            ignore_pretraining_limits=True,
+            model_path=model_path,
+            random_state=int(context.get("seed", 42)) + (3700 if gender_key == "men" else 3800),
+            n_preprocessing_jobs=1,
+        )
+    else:
+        raise RuntimeError(f"[{gender_key}] unsupported submission candidate: {candidate_id}")
+
+    model.fit(
+        train_df.loc[:, available_feature_columns],
+        train_df["Target"].to_numpy(dtype=float),
+    )
+    return model, available_feature_columns
+
+
+def _predict_submission_probabilities_in_batches(
+    *,
+    model: Any,
+    feature_frame: pd.DataFrame,
+    feature_columns: list[str],
+    batch_size: int,
+    label: str,
+) -> np.ndarray:
+    total_rows = int(len(feature_frame))
+    if total_rows == 0:
+        return np.asarray([], dtype=float)
+
+    if batch_size <= 0 or total_rows <= batch_size:
+        return np.asarray(model.predict_proba(feature_frame.loc[:, feature_columns])[:, 1], dtype=float)
+
+    chunks: list[np.ndarray] = []
+    for start in range(0, total_rows, batch_size):
+        end = min(start + batch_size, total_rows)
+        print(f"[submission] {label} rows {start}:{end}/{total_rows}")
+        chunk_frame = feature_frame.iloc[start:end]
+        chunk_pred = model.predict_proba(chunk_frame.loc[:, feature_columns])[:, 1]
+        chunks.append(np.asarray(chunk_pred, dtype=float))
+    return np.concatenate(chunks, axis=0)
+
+
+def _build_real_submission_frame(context: dict[str, Any], sample_df: pd.DataFrame) -> pd.DataFrame:
+    train_output = context.get("stage_outputs", {}).get("train", {})
+    eval_output = context.get("stage_outputs", {}).get("eval_report", {})
+    genders_payload = train_output.get("genders", {}) if isinstance(train_output, dict) else {}
+    final_blend_recipe = eval_output.get("final_blend_recipe", {}) if isinstance(eval_output, dict) else {}
+    final_recipe_by_gender = (
+        final_blend_recipe.get("by_gender", {}) if isinstance(final_blend_recipe.get("by_gender", {}), dict) else {}
+    )
+
+    feature_module = _load_script_module("02_feature_engineering.py", "feature_engineering_submission_stage")
+    feature_module.DATA_DIR = str(
+        _resolve_pipeline_data_dir(
+            required_files=(
+                "MRegularSeasonCompactResults.csv",
+                "MNCAATourneyCompactResults.csv",
+                "MRegularSeasonDetailedResults.csv",
+                "WRegularSeasonCompactResults.csv",
+                "WNCAATourneyCompactResults.csv",
+                "WRegularSeasonDetailedResults.csv",
+                "SampleSubmissionStage2.csv",
+            )
+        )
+    )
+
+    men_team_features, _, _ = feature_module.build_team_feature_snapshot(gender="M")
+    women_team_features, _, _ = feature_module.build_team_feature_snapshot(gender="W")
+    if men_team_features is None or women_team_features is None:
+        raise RuntimeError("team feature snapshots could not be built for submission inference")
+
+    men_team_ids = set(men_team_features.loc[men_team_features["Season"] == 2026, "TeamID"].astype(int).tolist())
+    women_team_ids = set(women_team_features.loc[women_team_features["Season"] == 2026, "TeamID"].astype(int).tolist())
+
+    parsed_ids = sample_df["ID"].astype(str).str.split("_", expand=True)
+    if parsed_ids.shape[1] != 3:
+        raise RuntimeError("sample submission IDs must follow Season_TeamA_TeamB format")
+
+    team_a = pd.to_numeric(parsed_ids[1], errors="coerce")
+    team_b = pd.to_numeric(parsed_ids[2], errors="coerce")
+    if team_a.isnull().any() or team_b.isnull().any():
+        raise RuntimeError("sample submission contains non-numeric team ids")
+
+    men_mask = team_a.isin(men_team_ids) & team_b.isin(men_team_ids)
+    women_mask = team_a.isin(women_team_ids) & team_b.isin(women_team_ids)
+    unresolved_mask = ~(men_mask | women_mask)
+    if unresolved_mask.any():
+        preview = sample_df.loc[unresolved_mask, "ID"].head(5).tolist()
+        raise RuntimeError(f"could not resolve submission gender for IDs: {preview}")
+
+    submission_parts: list[pd.DataFrame] = []
+    candidate_model_cache: dict[tuple[str, str], tuple[Any, list[str]]] = {}
+
+    for gender_key, gender_code, team_features, mask in (
+        ("men", "M", men_team_features, men_mask),
+        ("women", "W", women_team_features, women_mask),
+    ):
+        gender_sample = sample_df.loc[mask, ["ID"]].copy()
+        if gender_sample.empty:
+            continue
+
+        print(f"[submission] building matchup matrix for {gender_key}: rows={len(gender_sample)}")
+
+        submission_features = feature_module.build_submission_matchup_matrix(
+            gender_sample,
+            team_features,
+            gender=gender_code,
+            default_round_num=1,
+        )
+
+        train_gender_payload = genders_payload.get(gender_key, {})
+        feature_snapshot = train_gender_payload.get("feature_snapshot", {}) if isinstance(train_gender_payload, dict) else {}
+        feature_columns = feature_snapshot.get("feature_columns") if isinstance(feature_snapshot, dict) else None
+        if not isinstance(feature_columns, list) or not feature_columns:
+            raise RuntimeError(f"[{gender_key}] feature_snapshot.feature_columns missing for submission inference")
+
+        feature_path = _resolve_feature_path_for_gender(context, gender_key)
+        historical_feature_df = pd.read_csv(feature_path)
+
+        missing_columns = [column for column in feature_columns if column not in submission_features.columns]
+        for column in missing_columns:
+            submission_features[column] = 0.0
+        submission_features = submission_features[["ID"] + feature_columns].copy()
+
+        selected_gender_payload = (
+            final_recipe_by_gender.get(gender_key, {})
+            if isinstance(final_recipe_by_gender.get(gender_key, {}), dict)
+            else {}
+        )
+        selected_weights = (
+            selected_gender_payload.get("selected_candidate_weights")
+            if isinstance(selected_gender_payload.get("selected_candidate_weights"), dict)
+            else {}
+        )
+        selected_candidate_id = selected_gender_payload.get("selected_candidate_id")
+        normalized_weights = {
+            str(component_id): float(weight)
+            for component_id, weight in selected_weights.items()
+            if _as_float_or_none(weight) is not None
+        }
+        if (
+            not selected_candidate_id
+            or selected_candidate_id == "baseline"
+            or not normalized_weights
+            or abs(sum(normalized_weights.values()) - 1.0) > 1e-6
+        ):
+            normalized_weights = {"baseline": 1.0}
+            selected_candidate_id = "baseline"
+
+        blended_pred = np.zeros(len(submission_features), dtype=float)
+        for component_id, weight in normalized_weights.items():
+            print(f"[submission] {gender_key} component={component_id} weight={weight}")
+            if component_id == "baseline":
+                model_path_value = train_gender_payload.get("model_path")
+                if not isinstance(model_path_value, str) or not model_path_value.strip():
+                    raise RuntimeError(f"[{gender_key}] baseline model_path missing for submission inference")
+                with Path(model_path_value).open("rb") as handle:
+                    model = pickle.load(handle)
+                model_feature_columns = feature_columns
+            else:
+                cache_key = (gender_key, component_id)
+                cached_entry = candidate_model_cache.get(cache_key)
+                if cached_entry is None:
+                    cached_entry = _fit_submission_candidate_model(
+                        context=context,
+                        gender_key=gender_key,
+                        candidate_id=component_id,
+                        feature_df=historical_feature_df,
+                        feature_columns=feature_columns,
+                    )
+                    candidate_model_cache[cache_key] = cached_entry
+                model, model_feature_columns = cached_entry
+
+            batch_size = 16384 if component_id == "tabpfn_benchmark" else 0
+            component_pred = _predict_submission_probabilities_in_batches(
+                model=model,
+                feature_frame=submission_features,
+                feature_columns=model_feature_columns,
+                batch_size=batch_size,
+                label=f"{gender_key}:{component_id}",
+            )
+            blended_pred += float(weight) * np.asarray(component_pred, dtype=float)
+
+        if gender_key == "men" and selected_candidate_id == "tabpfn_benchmark":
+            high_prob_mask = blended_pred >= HIGH_PROB_THRESHOLD
+            if np.any(high_prob_mask):
+                blended_pred[high_prob_mask] = blended_pred[high_prob_mask] + MEN_TABPFN_HIGH_PROB_TAIL_LIFT * (
+                    1.0 - blended_pred[high_prob_mask]
+                )
+
+        submission_parts.append(
+            pd.DataFrame(
+                {
+                    "ID": submission_features["ID"].astype(str),
+                    "Pred": np.clip(blended_pred, 0.0, 1.0),
+                }
+            )
+        )
+
+    if not submission_parts:
+        raise RuntimeError("submission inference produced no gender-specific frames")
+
+    submission_df = pd.concat(submission_parts, ignore_index=True)
+    submission_df = sample_df[["ID"]].merge(submission_df, on="ID", how="left")
+    if submission_df["Pred"].isnull().any():
+        missing_count = int(submission_df["Pred"].isnull().sum())
+        raise RuntimeError(f"submission inference left {missing_count} IDs without prediction")
+    return submission_df
+
+
 def _build_optional_submission(context: dict[str, Any]) -> dict[str, Any]:
     submission_stage = str(context.get("submission_stage", "none")).lower()
     run_dir = Path(context["run_dir"])
@@ -5771,12 +6576,7 @@ def _build_optional_submission(context: dict[str, Any]) -> dict[str, Any]:
     if "ID" not in sample_df.columns:
         raise RuntimeError(f"submission sample missing ID column: {sample_path}")
 
-    submission_df = pd.DataFrame(
-        {
-            "ID": sample_df["ID"].astype(str),
-            "Pred": np.full(len(sample_df), 0.5, dtype=float),
-        }
-    )
+    submission_df = _build_real_submission_frame(context, sample_df)
 
     submission_path = run_dir / f"submission_{submission_stage}.csv"
     submission_df.to_csv(submission_path, index=False)
@@ -5789,6 +6589,13 @@ def _build_optional_submission(context: dict[str, Any]) -> dict[str, Any]:
         "sample_csv": str(sample_path),
         "submission_csv": str(submission_path),
         "row_count": int(len(submission_df)),
+        "prediction_summary": {
+            "min_pred": float(submission_df["Pred"].min()),
+            "max_pred": float(submission_df["Pred"].max()),
+            "mean_pred": float(submission_df["Pred"].mean()),
+            "unique_pred_count": int(submission_df["Pred"].nunique()),
+            "exact_half_count": int(np.isclose(submission_df["Pred"].to_numpy(dtype=float), 0.5).sum()),
+        },
         "validation": validation,
     }
 
@@ -5799,6 +6606,7 @@ def _build_optional_submission(context: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError("submission validation failed")
 
     report_payload["validation_report_json"] = str(report_path)
+    report_payload["prediction_summary"] = report_payload.get("prediction_summary", {})
     return report_payload
 
 
@@ -6582,6 +7390,33 @@ def _calibrate_probability_vectors(
             calibrator.fit(val_prob, val_true)
             val_adjusted = calibrator.predict(val_prob)
             test_adjusted = calibrator.predict(test_prob)
+        elif method == "shrink":
+            best_pair: tuple[np.ndarray, np.ndarray] | None = None
+            best_objective: tuple[float, float, float, float] | None = None
+            for alpha in CALIBRATION_SHRINK_GRID:
+                val_candidate = np.clip(0.5 + float(alpha) * (val_prob - 0.5), 1e-6, 1 - 1e-6)
+                test_candidate = np.clip(0.5 + float(alpha) * (test_prob - 0.5), 1e-6, 1 - 1e-6)
+                val_metrics = _score_probability_bundle(
+                    gender_key="calibration",
+                    split_label="Val",
+                    y_true=val_true,
+                    y_prob=val_candidate,
+                )
+                val_brier = _as_float_or_none(val_metrics.get("brier")) or float("inf")
+                val_ece = _as_float_or_none(val_metrics.get("ece")) or 0.0
+                val_gap_abs = abs(_as_float_or_none(val_metrics.get("high_prob_gap")) or 0.0)
+                objective = (
+                    float(val_brier + 0.5 * val_ece + 0.25 * val_gap_abs),
+                    val_brier,
+                    val_ece,
+                    val_gap_abs,
+                )
+                if best_objective is None or objective < best_objective:
+                    best_objective = objective
+                    best_pair = (val_candidate, test_candidate)
+            if best_pair is None:
+                return None, None, "shrink_grid_failed"
+            val_adjusted, test_adjusted = best_pair
         else:
             return None, None, f"unknown_method:{method}"
     except Exception as exc:
@@ -6694,6 +7529,9 @@ def _build_calibration_policy_for_gender(
         if isinstance(baseline_brier, (int, float)) and isinstance(best_brier, (int, float)):
             improvement = float(baseline_brier - best_brier)
 
+        selected_method = best_method
+        selection_reason = "best_val_brier"
+
         if best_method != default_method and improvement is not None and improvement < CALIBRATION_POLICY_MIN_IMPROVEMENT:
             if default_method in available_methods:
                 selected_method = default_method
@@ -6701,9 +7539,25 @@ def _build_calibration_policy_for_gender(
             else:
                 selected_method = best_method
                 selection_reason = "default_unavailable_use_best"
-        else:
-            selected_method = best_method
-            selection_reason = "best_val_brier"
+
+        # Men's isotonic calibration is unstable on the small validation slice:
+        # it can win strongly on Val while still hurting held-out Test Brier.
+        # Guardrail it so we only keep the more flexible calibrator when it does
+        # not degrade Test relative to the uncalibrated candidate.
+        if gender_key == "men" and selected_method == "isotonic":
+            none_test_brier = candidate_payloads.get("none", {}).get("test", {}).get("brier")
+            isotonic_test_brier = candidate_payloads.get("isotonic", {}).get("test", {}).get("brier")
+            if (
+                isinstance(none_test_brier, (int, float))
+                and isinstance(isotonic_test_brier, (int, float))
+                and isotonic_test_brier > none_test_brier + REGRESSION_NUMERIC_EPS
+            ):
+                if default_method in available_methods:
+                    selected_method = default_method
+                    selection_reason = "men_isotonic_test_brier_degraded_use_default"
+                else:
+                    selected_method = "none"
+                    selection_reason = "men_isotonic_test_brier_degraded_use_none"
 
     selected_payload = candidate_payloads.get(selected_method, {})
     selected_test = selected_payload.get("test") if isinstance(selected_payload, dict) else None
@@ -7291,6 +8145,11 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
         context=context,
         alternative_model_payload=alternative_model_payload,
     )
+    final_blend_recipe_payload = _build_final_blend_recipe_report(
+        context=context,
+        alternative_model_payload=alternative_model_payload,
+        men_tabpfn_followup_payload=men_tabpfn_followup_payload,
+    )
     men_policy_refinement_payload = _build_men_policy_refinement_report(
         context=context,
         feature_df=feature_frames_by_gender.get("men", pd.DataFrame()),
@@ -7340,7 +8199,9 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
         genders_payload=genders_payload,
         feature_frames_by_gender=feature_frames_by_gender,
         baseline_split_probabilities=baseline_split_probabilities,
+        alternative_model_payload=alternative_model_payload,
         blend_candidate_policy_payload=blend_candidate_policy_payload,
+        final_blend_recipe_payload=final_blend_recipe_payload,
         men_external_prior_policy_payload=men_external_prior_policy_payload,
         men_combo_followup_payload=men_combo_followup_payload,
         policy_name=context.get("prediction_policy", "baseline"),
@@ -7826,6 +8687,7 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
         "men_combo_followup": men_combo_followup_payload,
         "men_tabpfn_followup": men_tabpfn_followup_payload,
         "blend_candidate_policy": blend_candidate_policy_payload,
+        "final_blend_recipe": final_blend_recipe_payload,
         "men_policy_refinement": men_policy_refinement_payload,
         "men_external_prior_policy": men_external_prior_policy_payload,
         "men_gate_aware_search": men_gate_aware_search_payload,
@@ -7854,6 +8716,7 @@ def stage_eval_report(context: dict[str, Any]) -> dict[str, Any]:
         "men_combo_followup": men_combo_followup_payload,
         "men_tabpfn_followup": men_tabpfn_followup_payload,
         "blend_candidate_policy": blend_candidate_policy_payload,
+        "final_blend_recipe": final_blend_recipe_payload,
         "men_policy_refinement": men_policy_refinement_payload,
         "men_external_prior_policy": men_external_prior_policy_payload,
         "men_gate_aware_search": men_gate_aware_search_payload,
@@ -7895,6 +8758,11 @@ def stage_artifact(context: dict[str, Any]) -> dict[str, Any]:
     blend_candidate_policy_output = (
         eval_output.get("blend_candidate_policy", {})
         if isinstance(eval_output.get("blend_candidate_policy", {}), dict)
+        else {}
+    )
+    final_blend_recipe_output = (
+        eval_output.get("final_blend_recipe", {})
+        if isinstance(eval_output.get("final_blend_recipe", {}), dict)
         else {}
     )
     men_policy_refinement_output = (
@@ -7941,6 +8809,7 @@ def stage_artifact(context: dict[str, Any]) -> dict[str, Any]:
         "men_combo_followup_report_json": men_combo_followup_output.get("report_json"),
         "men_tabpfn_followup_report_json": men_tabpfn_followup_output.get("report_json"),
         "blend_candidate_policy_report_json": blend_candidate_policy_output.get("report_json"),
+        "final_blend_recipe_report_json": final_blend_recipe_output.get("report_json"),
         "men_policy_refinement_report_json": men_policy_refinement_output.get("report_json"),
         "men_external_prior_policy_report_json": men_external_prior_policy_output.get("report_json"),
         "men_gate_aware_search_report_json": men_gate_aware_search_output.get("report_json"),
@@ -8197,6 +9066,7 @@ def stage_artifact(context: dict[str, Any]) -> dict[str, Any]:
             "submission_csv": submission_payload.get("submission_csv"),
             "stage": submission_payload.get("stage"),
             "reason": submission_payload.get("reason"),
+            "prediction_summary": submission_payload.get("prediction_summary"),
         },
         "readiness": {
             "status": readiness_payload.get("status"),

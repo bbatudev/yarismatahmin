@@ -79,6 +79,7 @@ def _build_context(tmp_path: Path, *, run_id: str, seed: int, git_commit: str, m
     men_tabpfn_followup_report = _write_json(run_dir / "men_tabpfn_followup_report.json", {"ok": True})
     men_gate_aware_search_report = _write_json(run_dir / "men_gate_aware_search_report.json", {"ok": True})
     blend_candidate_policy_report = _write_json(run_dir / "blend_candidate_policy_report.json", {"ok": True})
+    final_blend_recipe_report = _write_json(run_dir / "final_blend_recipe_report.json", {"ok": True})
     men_policy_refinement_report = _write_json(run_dir / "men_policy_refinement_report.json", {"ok": True})
     men_external_prior_policy_report = _write_json(run_dir / "men_external_prior_policy_report.json", {"ok": True})
     error_report = _write_json(run_dir / "error_decomposition_report.json", {"ok": True})
@@ -170,6 +171,15 @@ def _build_context(tmp_path: Path, *, run_id: str, seed: int, git_commit: str, m
                 "by_gender": {
                     "men": {"candidate_status": "hold_research_only"},
                     "women": {"candidate_status": "hold_research_only"},
+                },
+            },
+            "final_blend_recipe": {
+                "report_json": str(final_blend_recipe_report),
+                "policy_name": "blend_final_recipe_v1",
+                "aggregate": {"decision": "explicit_final_recipe", "candidate_ready_genders": ["men", "women"]},
+                "by_gender": {
+                    "men": {"selected_candidate_weights": {"baseline": 0.5, "histgb_benchmark": 0.5}},
+                    "women": {"selected_candidate_weights": {"baseline": 0.6, "histgb_benchmark": 0.4}},
                 },
             },
             "men_policy_refinement": {

@@ -246,6 +246,7 @@ def test_stage_eval_report_emits_alternative_model_benchmark_contract(tmp_path, 
     assert eval_report["prediction_policy"]["selected_policy"] in {
         "men_external_prior_policy_v1",
         "blend_candidate_v1",
+        "blend_final_recipe_v1",
         "mixed_with_baseline_fallback",
     }
     blend_policy_report_path = Path(result["blend_candidate_policy"]["report_json"])
@@ -255,6 +256,12 @@ def test_stage_eval_report_emits_alternative_model_benchmark_contract(tmp_path, 
     assert "aggregate" in blend_policy_report
     assert "candidate_ready_genders" in blend_policy_report["aggregate"]
     assert eval_report["blend_candidate_policy"]["report_json"] == str(blend_policy_report_path)
+    final_blend_recipe_report_path = Path(result["final_blend_recipe"]["report_json"])
+    assert final_blend_recipe_report_path.exists()
+    final_blend_recipe_report = json.loads(final_blend_recipe_report_path.read_text(encoding="utf-8"))
+    assert final_blend_recipe_report["policy_name"] == "blend_final_recipe_v1"
+    assert final_blend_recipe_report["aggregate"]["decision"] == "explicit_final_recipe"
+    assert eval_report["final_blend_recipe"]["report_json"] == str(final_blend_recipe_report_path)
     men_policy_report_path = Path(result["men_policy_refinement"]["report_json"])
     assert men_policy_report_path.exists()
     men_policy_report = json.loads(men_policy_report_path.read_text(encoding="utf-8"))
@@ -292,3 +299,93 @@ def test_stage_eval_report_emits_alternative_model_benchmark_contract(tmp_path, 
             "men_external_prior_policy_v1",
         } and policy_weights is not None:
             assert eval_weights == policy_weights
+        if eval_report["prediction_policy"]["by_gender"][gender_key]["selected_policy"] == "blend_final_recipe_v1":
+            assert eval_weights == final_blend_recipe_report["by_gender"][gender_key]["selected_candidate_weights"]
+
+
+def test_final_blend_recipe_promotes_men_tabpfn_gate_ready_candidate(tmp_path):
+    module = _load_module()
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    men_tabpfn_report_path = run_dir / "men_tabpfn_followup_report.json"
+    men_tabpfn_report_path.write_text(
+        json.dumps(
+            {
+                "reference_weights": {"baseline": 0.75, "histgb_benchmark": 0.25},
+                "candidates": [
+                    {
+                        "candidate_id": "tabpfn_raw",
+                        "status": "available",
+                        "raw_metrics": {
+                            "val": {"brier": 0.2148},
+                            "test": {"brier": 0.1703},
+                        },
+                        "raw_local_gate_check_vs_baseline": {"status": "passed"},
+                    }
+                ],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    alternative_model_payload = {
+        "by_gender": {
+            "men": {
+                "selection": {
+                    "selected_candidate_id": "baseline_histgb_spline_logistic_blend",
+                    "selected_candidate_weights": {
+                        "baseline": 0.4,
+                        "histgb_benchmark": 0.2,
+                        "spline_logistic_benchmark": 0.4,
+                    },
+                },
+                "candidates": [
+                    {
+                        "candidate_id": "baseline",
+                        "status": "available",
+                        "metrics": {
+                            "test": {
+                                "brier": 0.1779,
+                                "ece": 0.0366,
+                                "wmae": 0.0366,
+                                "high_prob_gap": -0.0383,
+                            }
+                        },
+                    },
+                    {
+                        "candidate_id": "baseline_histgb_spline_logistic_blend",
+                        "status": "available",
+                        "metrics": {
+                            "test": {
+                                "brier": 0.1760,
+                                "ece": 0.0464,
+                                "wmae": 0.0464,
+                                "high_prob_gap": -0.0539,
+                            }
+                        },
+                    },
+                ],
+            },
+            "women": {
+                "selection": {
+                    "selected_candidate_id": "spline_logistic_benchmark",
+                    "selected_candidate_weights": {"spline_logistic_benchmark": 1.0},
+                },
+                "candidates": [],
+            },
+        }
+    }
+
+    result = module._build_final_blend_recipe_report(
+        context={"run_id": "unit_final_recipe", "seed": 42, "run_dir": str(run_dir)},
+        alternative_model_payload=alternative_model_payload,
+        men_tabpfn_followup_payload={"report_json": str(men_tabpfn_report_path)},
+    )
+
+    report = json.loads(Path(result["report_json"]).read_text(encoding="utf-8"))
+    assert report["by_gender"]["men"]["selected_candidate_id"] == "tabpfn_benchmark"
+    assert report["by_gender"]["men"]["selected_candidate_weights"] == {"tabpfn_benchmark": 1.0}
+    assert report["by_gender"]["men"]["selection_source"] == "men_tabpfn_followup"
+    assert report["by_gender"]["women"]["selected_candidate_id"] == "spline_logistic_benchmark"
